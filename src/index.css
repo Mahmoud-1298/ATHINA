@@ -1,0 +1,102 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 20 10% 4%;
+    --foreground: 35 60% 90%;
+
+    --card: 20 10% 7%;
+    --card-foreground: 35 60% 90%;
+
+    --popover: 20 10% 7%;
+    --popover-foreground: 35 60% 90%;
+
+    --primary: 35 90% 52%;
+    --primary-foreground: 20 10% 4%;
+
+    --secondary: 30 30% 12%;
+    --secondary-foreground: 35 60% 80%;
+
+    --muted: 25 10% 14%;
+    --muted-foreground: 30 15% 45%;
+
+    --accent: 30 80% 40%;
+    --accent-foreground: 20 10% 4%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 30 15% 15%;
+    --input: 30 15% 15%;
+    --ring: 35 90% 52%;
+
+    --radius: 0.75rem;
+
+    --neon-glow: 0 0 20px hsl(35 90% 52% / 0.3), 0 0 60px hsl(35 90% 52% / 0.1);
+    --neon-glow-strong: 0 0 30px hsl(35 90% 52% / 0.5), 0 0 80px hsl(35 90% 52% / 0.2), 0 0 120px hsl(35 90% 52% / 0.08);
+    --neon-text-glow: 0 0 10px hsl(35 90% 52% / 0.6), 0 0 30px hsl(35 90% 52% / 0.2);
+
+    --sidebar-background: 20 10% 5%;
+    --sidebar-foreground: 35 60% 90%;
+    --sidebar-primary: 35 90% 52%;
+    --sidebar-primary-foreground: 20 10% 4%;
+    --sidebar-accent: 30 30% 14%;
+    --sidebar-accent-foreground: 35 60% 90%;
+    --sidebar-border: 30 15% 15%;
+    --sidebar-ring: 35 90% 52%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+
+  code, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer utilities {
+  .neon-glow {
+    box-shadow: var(--neon-glow);
+  }
+
+  .neon-glow-strong {
+    box-shadow: var(--neon-glow-strong);
+  }
+
+  .neon-text {
+    text-shadow: var(--neon-text-glow);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 15px hsl(35 90% 52% / 0.2), 0 0 40px hsl(35 90% 52% / 0.08); }
+  50% { box-shadow: 0 0 25px hsl(35 90% 52% / 0.35), 0 0 60px hsl(35 90% 52% / 0.12); }
+}
+
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 1; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes typing-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
