@@ -13,7 +13,7 @@ interface Props {
   isActive: boolean;
 }
 
-/* ================= PARTICLES (BRAIN STRUCTURE) ================= */
+/* ================= PARTICLES ================= */
 const ParticleField = ({ isSpeaking }: Props) => {
   const ref = useRef<THREE.Points>(null);
   const basePositions = useRef<Float32Array>();
@@ -34,7 +34,6 @@ const ParticleField = ({ isSpeaking }: Props) => {
 
       const r = 3 * (0.4 + Math.random() * 0.6);
 
-      // 🧠 Brain-like shaping (left/right hemispheres)
       const x = side * (Math.sin(phi) * Math.cos(theta) * r * 1.2);
       const y = Math.sin(theta) * r * 0.6;
       const z = Math.cos(phi) * r;
@@ -75,12 +74,10 @@ const ParticleField = ({ isSpeaking }: Props) => {
 
       const t = time.current;
 
-      // idle movement
       const move =
         Math.sin(t * 0.6 + i) * 0.08 +
         Math.cos(t * 0.4 + i * 0.3) * 0.08;
 
-      // speaking expansion
       const expand =
         scatter.current *
         (2.5 + Math.sin(t * 8 + i) * 1.5);
@@ -143,12 +140,13 @@ const ParticleField = ({ isSpeaking }: Props) => {
   return <points ref={ref} geometry={geometry} material={material} />;
 };
 
-/* ================= CONNECTIONS (REALISTIC NEURAL LINKS) ================= */
+/* ================= CONNECTIONS ================= */
 const Connections = ({ isSpeaking }: Props) => {
   const ref = useRef<THREE.LineSegments>(null);
+  const signalRef = useRef<THREE.Points>(null);
 
-  useFrame(() => {
-    if (!ref.current) return;
+  useFrame((state) => {
+    if (!ref.current || !signalRef.current) return;
 
     const particles = (ref.current.parent?.children[0] as any)
       ?.geometry?.attributes.position.array;
@@ -156,58 +154,83 @@ const Connections = ({ isSpeaking }: Props) => {
     if (!particles) return;
 
     const lines: number[] = [];
-    const colors: number[] = [];
+    const signalPoints: number[] = [];
+
+    const time = state.clock.elapsedTime;
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       for (let j = i + 1; j < PARTICLE_COUNT; j++) {
-        const dx = particles[i * 3] - particles[j * 3];
-        const dy = particles[i * 3 + 1] - particles[j * 3 + 1];
-        const dz = particles[i * 3 + 2] - particles[j * 3 + 2];
+        const x1 = particles[i * 3];
+        const y1 = particles[i * 3 + 1];
+        const z1 = particles[i * 3 + 2];
+
+        const x2 = particles[j * 3];
+        const y2 = particles[j * 3 + 1];
+        const z2 = particles[j * 3 + 2];
+
+        const dx = x1 - x2;
+        const dy = y1 - y2;
+        const dz = z1 - z2;
 
         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
         if (dist < CONNECTION_DISTANCE) {
-          const strength = 1 - dist;
+          lines.push(x1, y1, z1, x2, y2, z2);
 
-          lines.push(
-            particles[i * 3],
-            particles[i * 3 + 1],
-            particles[i * 3 + 2],
-            particles[j * 3],
-            particles[j * 3 + 1],
-            particles[j * 3 + 2]
-          );
+          // ⚡ SIGNAL TRAVEL
+          const speed = isSpeaking ? 2.5 : 1;
+          const t = (time * speed + i * 0.1) % 1;
 
-          const glow = isSpeaking ? 1.0 : 0.3;
+          const sx = x1 + (x2 - x1) * t;
+          const sy = y1 + (y2 - y1) * t;
+          const sz = z1 + (z2 - z1) * t;
 
-          colors.push(
-            strength * glow,
-            strength * 1.2 * glow,
-            strength * 0.4 * glow,
-            strength * glow,
-            strength * 1.2 * glow,
-            strength * 0.4 * glow
-          );
+          signalPoints.push(sx, sy, sz);
         }
       }
     }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(lines, 3));
-    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
 
     ref.current.geometry.dispose();
     ref.current.geometry = geo;
+
+    const signalGeo = new THREE.BufferGeometry();
+    signalGeo.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(signalPoints, 3)
+    );
+
+    signalRef.current.geometry.dispose();
+    signalRef.current.geometry = signalGeo;
+
   });
 
   return (
-    <lineSegments ref={ref}>
-      <lineBasicMaterial vertexColors transparent opacity={isSpeaking ? 0.6 : 0.15} />
-    </lineSegments>
+    <>
+      <lineSegments ref={ref}>
+        <lineBasicMaterial
+          color={GREEN_PRIMARY}
+          transparent
+          opacity={isSpeaking ? 0.6 : 0.15}
+        />
+      </lineSegments>
+
+      {/* ⚡ SIGNAL PARTICLES */}
+      <points ref={signalRef}>
+        <pointsMaterial
+          color="#D4FF7A"
+          size={0.05}
+          transparent
+          opacity={0.9}
+        />
+      </points>
+    </>
   );
 };
 
-/* ================= CORE ENERGY ================= */
+/* ================= CORE ================= */
 const Core = ({ isSpeaking }: { isSpeaking: boolean }) => {
   const ref = useRef<THREE.Mesh>(null);
 
@@ -240,3 +263,4 @@ const JarvisParticles = ({ isSpeaking, isActive }: Props) => {
 };
 
 export default JarvisParticles;
+``
