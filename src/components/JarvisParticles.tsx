@@ -2,90 +2,101 @@ import { useRef, useMemo } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-const PARTICLE_COUNT = 700;
-const CONNECTION_DISTANCE = 0.6;
+const NODE_COUNT = 500;
+const CONNECTION_DISTANCE = 1.4;
 
-const GREEN_PRIMARY = "#7AB928";
+const COLOR = "#7AB928";
 
 interface Props {
   isSpeaking: boolean;
   isActive: boolean;
 }
 
-/* ================= CLEAN BRAIN STRUCTURE ================= */
-const BrainPoints = () => {
+/* ================= NODES ================= */
+const Nodes = () => {
   const ref = useRef<THREE.Points>(null);
 
-  const geometry = useMemo(() => {
-    const positions = new Float32Array(PARTICLE_COUNT * 3);
+  const { positions } = useMemo(() => {
+    const positions = new Float32Array(NODE_COUNT * 3);
 
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-      const t = Math.random() * Math.PI * 2;
-      const p = Math.random() * Math.PI;
+    for (let i = 0; i < NODE_COUNT; i++) {
+      const phi = Math.acos(2 * Math.random() - 1);
+      const theta = Math.random() * Math.PI * 2;
 
-      // 🧠 Better brain silhouette (compressed + shaped)
-      const r = 2.8 + Math.sin(p) * 0.5;
+      const r = 3.2;
 
-      const x = Math.cos(t) * Math.sin(p) * r * 1.6;
-      const y = Math.sin(t) * Math.sin(p) * r * 1.0;
-      const z = Math.cos(p) * r * 0.8;
+      const x = r * Math.sin(phi) * Math.cos(theta);
+      const y = r * Math.sin(phi) * Math.sin(theta);
+      const z = r * Math.cos(phi);
 
-      // flatten bottom → brain base
-      const finalY = y * (y > 0 ? 1 : 0.5);
-
-      positions.set([x, finalY, z], i * 3);
+      positions.set([x, y, z], i * 3);
     }
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    return geo;
+    return { positions };
   }, []);
 
   return (
-    <points ref={ref} geometry={geometry}>
+    <points ref={ref}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" array={positions} count={NODE_COUNT} itemSize={3} />
+      </bufferGeometry>
       <pointsMaterial
-        color={GREEN_PRIMARY}
-        size={0.015}
+        color={COLOR}
+        size={0.04}
         transparent
-        opacity={0.35}
-        depthWrite={false}
+        opacity={0.7}
       />
     </points>
   );
 };
 
-/* ================= NEURAL CONNECTIONS ================= */
-const BrainConnections = () => {
-  const ref = useRef<THREE.LineSegments>(null);
+/* ================= CONNECTIONS + SIGNALS ================= */
+const Connections = ({ isSpeaking }: Props) => {
+  const lineRef = useRef<THREE.LineSegments>(null);
+  const signalRef = useRef<THREE.Points>(null);
 
-  useFrame(() => {
-    if (!ref.current) return;
+  useFrame((state) => {
+    if (!lineRef.current || !signalRef.current) return;
 
-    const particles = (ref.current.parent?.children[0] as any)
+    const nodes = (lineRef.current.parent?.children[0] as any)
       ?.geometry?.attributes.position.array;
 
-    if (!particles) return;
+    if (!nodes) return;
 
     const lines: number[] = [];
+    const signals: number[] = [];
 
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-      for (let j = i + 1; j < PARTICLE_COUNT; j++) {
-        const dx = particles[i * 3] - particles[j * 3];
-        const dy = particles[i * 3 + 1] - particles[j * 3 + 1];
-        const dz = particles[i * 3 + 2] - particles[j * 3 + 2];
+    const t = state.clock.elapsedTime;
+
+    for (let i = 0; i < NODE_COUNT; i++) {
+      for (let j = i + 1; j < NODE_COUNT; j++) {
+        const x1 = nodes[i * 3];
+        const y1 = nodes[i * 3 + 1];
+        const z1 = nodes[i * 3 + 2];
+
+        const x2 = nodes[j * 3];
+        const y2 = nodes[j * 3 + 1];
+        const z2 = nodes[j * 3 + 2];
+
+        const dx = x1 - x2;
+        const dy = y1 - y2;
+        const dz = z1 - z2;
 
         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-        // ✅ tighter connections = cleaner structure
         if (dist < CONNECTION_DISTANCE) {
-          lines.push(
-            particles[i * 3],
-            particles[i * 3 + 1],
-            particles[i * 3 + 2],
-            particles[j * 3],
-            particles[j * 3 + 1],
-            particles[j * 3 + 2]
-          );
+          // ✅ connections
+          lines.push(x1, y1, z1, x2, y2, z2);
+
+          // ⚡ SIGNAL FLOW (ON THE LINE)
+          const speed = isSpeaking ? 2.5 : 1;
+          const p = ((t * speed + i * 0.1) % 1);
+
+          const sx = x1 + (x2 - x1) * p;
+          const sy = y1 + (y2 - y1) * p;
+          const sz = z1 + (z2 - z1) * p;
+
+          signals.push(sx, sy, sz);
         }
       }
     }
@@ -93,58 +104,58 @@ const BrainConnections = () => {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(lines, 3));
 
-    ref.current.geometry.dispose();
-    ref.current.geometry = geo;
+    lineRef.current.geometry.dispose();
+    lineRef.current.geometry = geo;
+
+    const sGeo = new THREE.BufferGeometry();
+    sGeo.setAttribute("position", new THREE.Float32BufferAttribute(signals, 3));
+
+    signalRef.current.geometry.dispose();
+    signalRef.current.geometry = sGeo;
   });
 
   return (
-    <lineSegments ref={ref}>
-      <lineBasicMaterial
-        color={GREEN_PRIMARY}
-        transparent
-        opacity={0.25} // ✅ reduced brightness
-      />
-    </lineSegments>
+    <>
+      <lineSegments ref={lineRef}>
+        <lineBasicMaterial
+          color={COLOR}
+          transparent
+          opacity={isSpeaking ? 0.8 : 0.25}
+        />
+      </lineSegments>
+
+      <points ref={signalRef}>
+        <pointsMaterial
+          color="#D4FF7A"
+          size={0.06}
+          transparent
+          opacity={1}
+        />
+      </points>
+    </>
   );
 };
 
-/* ================= SUBTLE SIGNALS ================= */
-const SignalFlow = () => {
-  const ref = useRef<THREE.Points>(null);
-  const time = useRef(0);
-
-  const geometry = useMemo(() => {
-    const positions = new Float32Array(200 * 3);
-    return new THREE.BufferGeometry().setAttribute(
-      "position",
-      new THREE.BufferAttribute(positions, 3)
-    );
-  }, []);
+/* ================= CORE ================= */
+const Core = ({ isSpeaking }: { isSpeaking: boolean }) => {
+  const ref = useRef<THREE.Mesh>(null);
 
   useFrame((_, delta) => {
     if (!ref.current) return;
-    time.current += delta;
 
-    const pos = ref.current.geometry.attributes.position.array as Float32Array;
-
-    for (let i = 0; i < pos.length; i += 3) {
-      pos[i] = Math.sin(time.current * 2 + i) * 1.5;
-      pos[i + 1] = Math.cos(time.current * 1.5 + i) * 1.0;
-      pos[i + 2] = Math.sin(time.current * 1.2 + i) * 1.2;
-    }
-
-    ref.current.geometry.attributes.position.needsUpdate = true;
+    const target = isSpeaking ? 1.8 : 1.2;
+    ref.current.scale.lerp(new THREE.Vector3(target, target, target), delta * 2);
   });
 
   return (
-    <points ref={ref} geometry={geometry}>
-      <pointsMaterial
-        color="#D9FF9A"
-        size={0.02}
+    <mesh ref={ref}>
+      <sphereGeometry args={[0.6, 32, 32]} />
+      <meshBasicMaterial
+        color={COLOR}
         transparent
-        opacity={0.15} // ✅ very subtle
+        opacity={0.25}
       />
-    </points>
+    </mesh>
   );
 };
 
@@ -152,10 +163,10 @@ const SignalFlow = () => {
 const JarvisParticles = ({ isSpeaking, isActive }: Props) => {
   return (
     <div className="fixed inset-0 z-0">
-      <Canvas camera={{ position: [0, 0, 8], fov: 60 }}>
-        <BrainPoints />
-        <BrainConnections />
-        <SignalFlow />
+      <Canvas camera={{ position: [0, 0, 9], fov: 60 }}>
+        <Nodes />
+        <Connections isSpeaking={isSpeaking} isActive={isActive} />
+        <Core isSpeaking={isSpeaking} />
       </Canvas>
     </div>
   );
