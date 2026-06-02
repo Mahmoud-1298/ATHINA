@@ -250,27 +250,27 @@ const Index = () => {
               </div>
             )}
           </div>
-
-          {/* Input */}
-          <form
-            onSubmit={handleTextSubmit}
-            className="flex items-center gap-3 border-t border-cyan-400/20 px-4 py-3"
-          >
-            <input
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              placeholder="chat with ATHINA…"
-              className="flex-1 bg-transparent text-sm text-white"
-            />
-            <button
-              type="submit"
-              className="px-4 py-1.5 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 text-black text-xs"
-            >
-              SEND
-            </button>
-          </form>
         </div>
+
+        {/* Floating Input Box */}
+        <form
+          onSubmit={handleTextSubmit}
+          className="absolute bottom-6 right-6 z-30 flex w-[min(420px,100%)] items-center gap-3 rounded-full border border-emerald-400/30 bg-black/80 px-4 py-3 shadow-2xl shadow-emerald-900/40 backdrop-blur-xl"
+        >
+          <input
+            type="text"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            placeholder="chat with ATHINA…"
+            className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/50"
+          />
+          <button
+            type="submit"
+            className="px-4 py-1.5 rounded-full bg-gradient-to-r from-emerald-400 to-green-600 text-black text-xs font-semibold"
+          >
+            SEND
+          </button>
+        </form>
       </div>
     </div>
   );
