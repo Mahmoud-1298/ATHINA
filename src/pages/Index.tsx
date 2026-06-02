@@ -187,8 +187,8 @@ const Index = () => {
 
       {/* Header */}
       <motion.header className="fixed top-0 left-0 right-0 z-20 px-6 py-4">
-        <span className="font-mono text-[10px] tracking-[0.4em] text-white/60">
-          MOROHUB • ATHINA
+        <span className="font-mono text-[10px] tracking-[0.4em] text-green-400/60">
+          ATHINA v1
         </span>
       </motion.header>
 
@@ -260,7 +260,7 @@ const Index = () => {
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder="Type to ATHINA…"
+              placeholder="chat with ATHINA…"
               className="flex-1 bg-transparent text-sm text-white"
             />
             <button
