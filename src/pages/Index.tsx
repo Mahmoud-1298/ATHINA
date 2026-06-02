@@ -112,7 +112,7 @@ const Index = () => {
         <div className="flex items-center gap-3">
           <div className="w-1.5 h-1.5 rounded-full bg-primary/30" />
           <span className="text-[10px] font-mono text-muted-foreground/60 tracking-wider">
-            MoroHub
+            ATHINA
           </span>
         </div>
       </motion.header>
@@ -126,7 +126,7 @@ const Index = () => {
           transition={{ delay: 0.3 }}
         >
           <h1 className="font-orbitron text-4xl md:text-5xl font-bold tracking-[0.18em] uppercase text-white/80">
-            MORO{" "} 
+            ATHINA{" "} 
             <span className="bg-gradient-to-r from-blue-400 via-cyan-300 to-blue-500 bg-clip-text text-transparent drop-shadow-[0_0_12px_rgba(59,130,246,0.6)]"> AI
             </span>
 
