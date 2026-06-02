@@ -100,3 +100,35 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
+
+/* Leaflet Map Styles */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  background: #1a1a1a;
+  border-radius: 1rem;
+  z-index: 10;
+}
+
+.leaflet-control {
+  background: rgba(0, 0, 0, 0.7) !important;
+  border: 1px solid rgba(52, 211, 153, 0.3) !important;
+}
+
+.leaflet-control a {
+  background: rgba(0, 0, 0, 0.8) !important;
+  color: #34d399 !important;
+  border: 1px solid rgba(52, 211, 153, 0.3) !important;
+}
+
+.leaflet-control a:hover {
+  background: rgba(52, 211, 153, 0.2) !important;
+}
+
+.leaflet-bar a:first-child {
+  border-radius: 0.5rem 0.5rem 0 0 !important;
+}
+
+.leaflet-bar a:last-child {
+  border-radius: 0 0 0.5rem 0.5rem !important;
+}

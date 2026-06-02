@@ -5,6 +5,7 @@ import { supabase } from "../integrations/supabase/client.ts";
 import VoiceOrb from "../components/VoiceOrb.tsx";
 import StatusBar from "../components/StatusBar.tsx";
 import JarvisParticles from "../components/JarvisParticles.tsx";
+import WorldMap from "../components/WorldMap.tsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -191,6 +192,11 @@ const Index = () => {
           ATHINA v1
         </span>
       </motion.header>
+
+      {/* World Map */}
+      <div className="absolute top-20 right-6 z-25 w-[20vw] h-[20vh] rounded-2xl border border-emerald-400/30 overflow-hidden shadow-2xl shadow-emerald-900/40">
+        <WorldMap />
+      </div>
 
       <div className="relative z-10 flex flex-col items-center gap-6 px-4 w-full max-w-4xl">
 
