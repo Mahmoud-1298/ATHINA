@@ -1,10 +1,12 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect, FormEvent } from "react";
 import { useConversation } from "@elevenlabs/react";
 import { motion } from "framer-motion";
-import { supabase } from "@/integrations/supabase/client";
-import VoiceOrb from "@/components/VoiceOrb";
-import StatusBar from "@/components/StatusBar";
-import JarvisParticles from "@/components/JarvisParticles";
+import { supabase } from "../integrations/supabase/client.ts";
+import VoiceOrb from "../components/VoiceOrb.tsx";
+import StatusBar from "../components/StatusBar.tsx";
+import JarvisParticles from "../components/JarvisParticles.tsx";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Message {
   id: string;
@@ -12,15 +14,23 @@ interface Message {
   text: string;
 }
 
+const BACKEND_CHAT_URL =
+  "https://athina-backend.onrender.com/api/chat";
+
 const Index = () => {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [inputText, setInputText] = useState("");
   const [partialText, setPartialText] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
+  /* ============================
+     VOICE (UNCHANGED)
+     ============================ */
   const conversation = useConversation({
     onMessage: (message: any) => {
       if (message.type === "agent_response") {
-        setPartialText("");
         setMessages((prev) => [
           ...prev,
           {
@@ -35,32 +45,33 @@ const Index = () => {
           {
             id: Date.now().toString(),
             role: "user",
-            text: message.user_transcription_event?.user_transcript || "",
+            text:
+              message.user_transcription_event?.user_transcript || "",
           },
         ]);
       }
     },
     onError: (error) => {
-      console.error("Conversation error:", error);
+      console.error("Voice error:", error);
     },
   });
 
   const startConversation = useCallback(async () => {
+    if (conversation.status === "connected") return;
+
     setIsConnecting(true);
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      const { data, error } = await supabase.functions.invoke("elevenlabs-signed-url");
-
-      if (error || !data?.signed_url) {
-        throw new Error(error?.message || "No signed URL received");
-      }
+      const { data } = await supabase.functions.invoke(
+        "elevenlabs-signed-url"
+      );
 
       await conversation.startSession({
-        signedUrl: data.signed_url,
+        signedUrl: data?.signed_url,
       });
     } catch (err) {
-      console.error("Failed to start:", err);
+      console.error(err);
     } finally {
       setIsConnecting(false);
     }
@@ -73,110 +84,197 @@ const Index = () => {
   const isActive = conversation.status === "connected";
 
   const handleOrbClick = () => {
-    if (isActive) {
-      stopConversation();
-    } else {
-      startConversation();
-    }
+    if (isActive) stopConversation();
+    else startConversation();
   };
+
+  /* ============================
+     ✅ STREAMING TEXT CHAT
+     ============================ */
+  const sendTextToBackend = async (text: string) => {
+    setIsTyping(true);
+    setPartialText("");
+
+    const res = await fetch(BACKEND_CHAT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: text,
+        sessionId: "ui-session",
+      }),
+    });
+
+    const reader = res.body?.getReader();
+    const decoder = new TextDecoder();
+
+    let fullText = "";
+
+    while (true) {
+      const { done, value } = await reader!.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split("\n").filter((l) => l.startsWith("data:"));
+
+      for (const line of lines) {
+        const data = line.replace("data:", "").trim();
+
+        if (data === "[DONE]") continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          const token = parsed.token;
+
+          if (token) {
+            fullText += token;
+            setPartialText(fullText); // live typing
+          }
+        } catch (e) {}
+      }
+    }
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        role: "agent",
+        text: fullText,
+      },
+    ]);
+
+    setPartialText("");
+    setIsTyping(false);
+  };
+
+  const handleTextSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (!inputText.trim()) return;
+
+    const userMessage = inputText;
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        role: "user",
+        text: userMessage,
+      },
+    ]);
+
+    setInputText("");
+    await sendTextToBackend(userMessage);
+  };
+
+  /* ============================
+     AUTO-SCROLL
+     ============================ */
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop =
+        scrollRef.current.scrollHeight;
+    }
+  }, [messages, partialText]);
 
   return (
     <div className="relative flex flex-col items-center justify-center min-h-screen bg-background overflow-hidden">
-      {/* Jarvis particle system */}
-      <JarvisParticles isSpeaking={conversation.isSpeaking} isActive={isActive} />
-
-      {/* Subtle vignette overlay */}
-      <div
-        className="fixed inset-0 z-[1] pointer-events-none"
-        style={{
-          background:
-            "radial-gradient(ellipse at center, transparent 40%, hsl(0 0% 2% / 0.85) 100%)",
-        }}
+      <JarvisParticles
+        isSpeaking={conversation.isSpeaking}
+        isActive={isActive}
       />
 
       {/* Header */}
-      <motion.header
-        className="fixed top-0 left-0 right-0 z-20 flex items-center justify-between px-6 py-4"
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
-      >
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-md border border-primary/20 flex items-center justify-center">
-            <div className="w-2 h-2 rounded-sm bg-primary/80" />
-          </div>
-          <span className="font-mono text-[11px] font-semibold tracking-[0.3em] text-foreground/80">
-            v.0.1
-          </span>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="w-1.5 h-1.5 rounded-full bg-primary/30" />
-          <span className="text-[10px] font-mono text-muted-foreground/60 tracking-wider">
-            ATHINA
-          </span>
-        </div>
+      <motion.header className="fixed top-0 left-0 right-0 z-20 px-6 py-4">
+        <span className="font-mono text-[10px] tracking-[0.4em] text-white/60">
+          MOROHUB • ATHINA
+        </span>
       </motion.header>
 
-      {/* Main content */}
       <div className="relative z-10 flex flex-col items-center gap-6 px-4 w-full max-w-4xl">
-        <motion.div
-          className="text-center space-y-1"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-        >
-          <h1 className="font-orbitron text-4xl md:text-5xl font-bold tracking-[0.18em] uppercase text-white/80">
-            ATHINA{" "} 
-            <span className="bg-gradient-to-r from-blue-400 via-cyan-300 to-blue-500 bg-clip-text text-transparent drop-shadow-[0_0_12px_rgba(59,130,246,0.6)]"> AI
-            </span>
 
-          </h1>
-          <p className="font-orbitron text-xs tracking-[0.4em] text-white/40 mt-2">
-            ATHINA  
-          </p>
+        <VoiceOrb
+          isActive={isActive}
+          isSpeaking={conversation.isSpeaking}
+          onClick={handleOrbClick}
+        />
 
-        </motion.div>
+        <StatusBar
+          status={conversation.status}
+          isSpeaking={conversation.isSpeaking}
+        />
 
-        <motion.div
-          initial={{ opacity: 0, scale: 0.8 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.5, type: "spring" }}
-        >
-          <VoiceOrb
-            isActive={isActive}
-            isSpeaking={conversation.isSpeaking}
-            onClick={handleOrbClick}
-          />
-        </motion.div>
+        {/* Chat Panel */}
+        <div className="w-full max-w-3xl mt-6 rounded-xl border border-cyan-400/20 bg-black/50 backdrop-blur-xl">
 
-        <StatusBar status={conversation.status} isSpeaking={conversation.isSpeaking} />
+          <div
+            ref={scrollRef}
+            className="max-h-[320px] overflow-y-auto px-4 py-4 space-y-3"
+          >
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`text-sm ${
+                  msg.role === "user"
+                    ? "text-right text-white/80"
+                    : "text-left text-cyan-300"
+                }`}
+              >
+                <div className="inline-block px-4 py-3 rounded-xl bg-white/5 border border-white/10 max-w-full">
+                  {msg.role === "agent" ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {msg.text}
+                    </ReactMarkdown>
+                  ) : (
+                    msg.text
+                  )}
+                </div>
+              </div>
+            ))}
 
-        <motion.p
-          className="text-[10px] font-mono text-muted-foreground/40 tracking-wider"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.7 }}
-        >
-          {isConnecting
-            ? "Establishing connection..."
-            : isActive
-            ? "Tap to end session"
-            : "Tap to initialize"}
-        </motion.p>
+            {/* ✅ STREAMING TEXT DISPLAY */}
+            {partialText && (
+              <div className="text-left text-cyan-300 text-sm">
+                <div className="inline-block px-4 py-3 rounded-xl bg-white/5 border border-white/10">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {partialText}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            )}
 
-        <motion.div
-          className="w-full"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.6 }}
-        >
-        </motion.div>
+            {isTyping && !partialText && (
+              <div className="text-left text-cyan-400/60 text-xs font-mono">
+                ATHINA is thinking…
+              </div>
+            )}
+          </div>
+
+          {/* Input */}
+          <form
+            onSubmit={handleTextSubmit}
+            className="flex items-center gap-3 border-t border-cyan-400/20 px-4 py-3"
+          >
+            <input
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder="Type to ATHINA…"
+              className="flex-1 bg-transparent text-sm text-white"
+            />
+            <button
+              type="submit"
+              className="px-4 py-1.5 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 text-black text-xs"
+            >
+              SEND
+            </button>
+          </form>
+        </div>
       </div>
-
-      {/* Bottom line */}
-      <div className="fixed bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent z-20" />
     </div>
   );
 };
 
 export default Index;
+``
