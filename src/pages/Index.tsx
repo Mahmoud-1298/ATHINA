@@ -204,58 +204,56 @@ const Index = () => {
           status={conversation.status}
           isSpeaking={conversation.isSpeaking}
         />
+      </div>
 
-        {/* Chat Panel */}
-        <div className="w-full max-w-3xl mt-6 rounded-xl border border-cyan-400/20 bg-black/50 backdrop-blur-xl">
-
-          <div
-            ref={scrollRef}
-            className="max-h-[320px] overflow-y-auto px-4 py-4 space-y-3"
-          >
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`text-sm ${
-                  msg.role === "user"
-                    ? "text-right text-white/80"
-                    : "text-left text-cyan-300"
-                }`}
-              >
-                <div className="inline-block px-4 py-3 rounded-xl bg-white/5 border border-white/10 max-w-full">
-                  {msg.role === "agent" ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {msg.text}
-                    </ReactMarkdown>
-                  ) : (
-                    msg.text
-                  )}
-                </div>
-              </div>
-            ))}
-
-            {/* ✅ STREAMING TEXT DISPLAY */}
-            {partialText && (
-              <div className="text-left text-cyan-300 text-sm">
-                <div className="inline-block px-4 py-3 rounded-xl bg-white/5 border border-white/10">
+      {/* Chat Panel */}
+      <div className="absolute bottom-6 right-6 z-30 w-[min(420px,calc(100%-3rem))] rounded-3xl border border-emerald-400/30 bg-black/80 shadow-2xl shadow-emerald-900/40 backdrop-blur-xl">
+        <div
+          ref={scrollRef}
+          className="max-h-[320px] overflow-y-auto px-4 py-4 space-y-3"
+        >
+          {messages.map((msg) => (
+            <div
+              key={msg.id}
+              className={`text-sm ${
+                msg.role === "user"
+                  ? "text-right text-white/80"
+                  : "text-left text-emerald-300"
+              }`}
+            >
+              <div className="inline-block px-4 py-3 rounded-2xl bg-white/5 border border-white/10 max-w-full">
+                {msg.role === "agent" ? (
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {partialText}
+                    {msg.text}
                   </ReactMarkdown>
-                </div>
+                ) : (
+                  msg.text
+                )}
               </div>
-            )}
+            </div>
+          ))}
 
-            {isTyping && !partialText && (
-              <div className="text-left text-cyan-400/60 text-xs font-mono">
-                ATHINA is thinking…
+          {/* ✅ STREAMING TEXT DISPLAY */}
+          {partialText && (
+            <div className="text-left text-emerald-300 text-sm">
+              <div className="inline-block px-4 py-3 rounded-2xl bg-white/5 border border-white/10">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {partialText}
+                </ReactMarkdown>
               </div>
-            )}
-          </div>
+            </div>
+          )}
+
+          {isTyping && !partialText && (
+            <div className="text-left text-emerald-400/60 text-xs font-mono">
+              ATHINA is thinking…
+            </div>
+          )}
         </div>
 
-        {/* Floating Input Box */}
         <form
           onSubmit={handleTextSubmit}
-          className="absolute bottom-6 right-6 z-30 flex w-[min(420px,100%)] items-center gap-3 rounded-full border border-emerald-400/30 bg-black/80 px-4 py-3 shadow-2xl shadow-emerald-900/40 backdrop-blur-xl"
+          className="flex items-center gap-3 border-t border-emerald-400/20 px-4 py-3"
         >
           <input
             type="text"
