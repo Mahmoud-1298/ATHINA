@@ -21,42 +21,33 @@ const RotatingEarth = () => {
         <sphereGeometry args={[1, 128, 128]} />
         <meshStandardMaterial
           map={earthTexture}
-          color="#9ca3af"
-          metalness={0.2}
-          roughness={0.55}
-          emissive="#0b1726"
-          emissiveIntensity={0.2}
+          color="#0b0b0b"
+          metalness={0.0}
+          roughness={0.9}
+          emissive="#000000"
+          emissiveIntensity={0.05}
+          transparent={false}
         />
       </mesh>
-      <mesh rotation={[0.15, 0, 0]}>
-        <sphereGeometry args={[1.01, 64, 64]} />
-        <meshBasicMaterial
-          color="#94a3b8"
-          wireframe
-          transparent
-          opacity={0.18}
-        />
-      </mesh>
+      {/* removed decorative wireframe sphere for a cleaner modern look */}
     </>
   );
 };
 
 const WorldMap = () => {
   return (
-    <div className="relative w-full h-full rounded-full overflow-hidden bg-slate-950/95 ring-1 ring-white/10 border border-white/10 shadow-2xl shadow-black/60">
+    <div className="relative w-full h-full rounded-full overflow-hidden bg-gradient-to-b from-slate-900 via-slate-950 to-black shadow-2xl shadow-black/60">
       <Canvas
         camera={{ position: [0, 0, 3.2], fov: 35 }}
         gl={{ antialias: true, alpha: true }}
       >
         <ambientLight intensity={0.3} />
-        <directionalLight position={[5, 3, 5]} intensity={0.9} color="#cbd5e1" />
-        <directionalLight position={[-5, -3, -5]} intensity={0.3} color="#475569" />
+        <directionalLight position={[5, 3, 5]} intensity={0.8} color="#bfc7d1" />
+        <directionalLight position={[-5, -3, -5]} intensity={0.25} color="#6b7280" />
         <RotatingEarth />
       </Canvas>
-
-      <div className="pointer-events-none absolute inset-0 rounded-full bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.05),transparent_20%)] opacity-20" />
-      <div className="pointer-events-none absolute inset-0 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.03),transparent_55%)] opacity-40" />
-      <div className="pointer-events-none absolute inset-0 rounded-full border border-white/10 opacity-15" />
+      <div className="pointer-events-none absolute inset-0 rounded-full bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.03),transparent_25%)] opacity-12" />
+      <div className="pointer-events-none absolute inset-0 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.02),transparent_60%)] opacity-18" />
     </div>
   );
 };
