@@ -202,8 +202,9 @@ const Index = () => {
           transition={{ delay: 0.3 }}
         >
           <h1 className="bg-gradient-to-r from-blue-400 via-cyan-300 to-blue-500 bg-clip-text text-transparent drop-shadow-[0_0_12px_rgba(59,130,246,0.6)]">
-            ATHINA{" "} 
-            </span>
+            ATHINA
+          </h1>
+        </motion.div>
 
       {/* World Map */}
       <div className="absolute top-20 right-6 z-25 w-[20vw] h-[20vh] rounded-2xl border border-emerald-400/30 overflow-hidden shadow-2xl shadow-emerald-900/40">
@@ -289,8 +290,8 @@ const Index = () => {
         </form>
       </div>
     </div>
+    </div>
   );
 };
 
 export default Index;
-``
