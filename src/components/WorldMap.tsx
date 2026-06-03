@@ -1,28 +1,52 @@
-import { Canvas, useFrame, useLoader } from "@react-three/fiber";
-import { TextureLoader } from "three/src/loaders/TextureLoader";
-import { useRef, useMemo } from "react";
+import { Canvas, useFrame } from "@react-three/fiber";
+import { useRef, useMemo, useState, useEffect } from "react";
 import { SphereGeometry, BufferGeometry, Float32BufferAttribute, Texture } from "three";
 import { OrbitControls } from "@react-three/drei";
 
 const RotatingEarth = () => {
   const groupRef = useRef<any>(null);
-  const earthTexture = useLoader(
-    TextureLoader,
-    "https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg"
-  );
+  const [imageBitmap, setImageBitmap] = useState<ImageBitmap | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const urls = [
+      "/textures/earth_atmos_2048.jpg",
+      "https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg",
+    ];
+
+    (async () => {
+      for (const url of urls) {
+        try {
+          const res = await fetch(url, { mode: "cors" });
+          if (!res.ok) throw new Error("fetch failed");
+          const blob = await res.blob();
+          const bitmap = await createImageBitmap(blob);
+          if (!mounted) return;
+          setImageBitmap(bitmap);
+          return;
+        } catch (e) {
+          // try next url
+        }
+      }
+      // no image loaded — leave imageBitmap null and fallback to procedural points
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Create a desaturated, darkened grayscale texture to avoid color blackout
   const processedTexture = useMemo(() => {
-    if (!earthTexture || !earthTexture.image) return null;
-    const img = earthTexture.image as HTMLImageElement | HTMLCanvasElement;
-    const w = img.width || 2048;
-    const h = img.height || 1024;
+    if (!imageBitmap) return null;
+    const w = imageBitmap.width || 2048;
+    const h = imageBitmap.height || 1024;
 
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(img, 0, 0, w, h);
+    ctx.drawImage(imageBitmap as any, 0, 0, w, h);
 
     const imgData = ctx.getImageData(0, 0, w, h);
     const data = imgData.data;
@@ -39,9 +63,8 @@ const RotatingEarth = () => {
 
     const tex = new Texture(canvas as HTMLCanvasElement);
     tex.needsUpdate = true;
-    tex.encoding = earthTexture.encoding;
     return tex;
-  }, [earthTexture]);
+  }, [imageBitmap]);
 
   // Create a sparse points geometry sampled from the processed texture to give a dotted effect
   const pointsGeometry = useMemo(() => {
