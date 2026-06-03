@@ -193,6 +193,18 @@ const Index = () => {
         </span>
       </motion.header>
 
+       {/* Main content */}
+      <div className="relative z-10 flex flex-col items-center gap-6 px-4 w-full max-w-4xl">
+        <motion.div
+          className="text-center space-y-1"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+        >
+          <h1 className="bg-gradient-to-r from-blue-400 via-cyan-300 to-blue-500 bg-clip-text text-transparent drop-shadow-[0_0_12px_rgba(59,130,246,0.6)]">
+            ATHINA{" "} 
+            </span>
+
       {/* World Map */}
       <div className="absolute top-20 right-6 z-25 w-[20vw] h-[20vh] rounded-2xl border border-emerald-400/30 overflow-hidden shadow-2xl shadow-emerald-900/40">
         <WorldMap />
