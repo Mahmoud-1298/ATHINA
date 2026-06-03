@@ -219,7 +219,7 @@ const Index = () => {
       </div>
 
       {/* World Map */}
-      <div className="absolute top-20 right-6 z-40 w-[18rem] h-[18rem] rounded-full border border-white/10 bg-slate-950/90 shadow-2xl shadow-black/40 overflow-hidden ring-1 ring-white/5">
+      <div className="absolute top-20 right-6 z-40 w-[18rem] h-[18rem] rounded-full bg-transparent shadow-2xl shadow-black/40 overflow-hidden">
         <WorldMap />
       </div>
 
