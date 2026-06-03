@@ -193,7 +193,7 @@ const Index = () => {
         </span>
       </motion.header>
 
-       {/* Main content */}
+      {/* Main content */}
       <div className="relative z-10 flex flex-col items-center gap-6 px-4 w-full max-w-4xl">
         <motion.div
           className="text-center space-y-1"
@@ -205,13 +205,6 @@ const Index = () => {
             ATHINA
           </h1>
         </motion.div>
-
-      {/* World Map */}
-      <div className="absolute top-20 right-6 z-25 w-[20vw] h-[20vh] rounded-2xl border border-emerald-400/30 overflow-hidden shadow-2xl shadow-emerald-900/40">
-        <WorldMap />
-      </div>
-
-      <div className="relative z-10 flex flex-col items-center gap-6 px-4 w-full max-w-4xl">
 
         <VoiceOrb
           isActive={isActive}
@@ -225,8 +218,13 @@ const Index = () => {
         />
       </div>
 
+      {/* World Map */}
+      <div className="absolute top-20 right-6 z-40 w-[22vw] h-[22vh] rounded-[2rem] border border-white/10 bg-slate-950/90 shadow-2xl shadow-black/40 overflow-hidden ring-1 ring-white/5">
+        <WorldMap />
+      </div>
+
       {/* Chat Panel */}
-      <div className="absolute bottom-6 right-6 z-30 w-[min(420px,calc(100%-3rem))] rounded-3xl border border-emerald-400/30 bg-black/80 shadow-2xl shadow-emerald-900/40 backdrop-blur-xl">
+      <div className="absolute bottom-6 right-6 z-40 w-[min(420px,calc(100%-3rem))] rounded-[2rem] border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/40 backdrop-blur-xl">
         <div
           ref={scrollRef}
           className="max-h-[320px] overflow-y-auto px-4 py-4 space-y-3"
@@ -289,7 +287,6 @@ const Index = () => {
           </button>
         </form>
       </div>
-    </div>
     </div>
   );
 };
