@@ -2,6 +2,7 @@ import { Canvas, useFrame, useLoader } from "@react-three/fiber";
 import { TextureLoader } from "three/src/loaders/TextureLoader";
 import { useRef, useMemo } from "react";
 import { SphereGeometry, BufferGeometry, Float32BufferAttribute, Texture } from "three";
+import { OrbitControls } from "@react-three/drei";
 
 const RotatingEarth = () => {
   const groupRef = useRef<any>(null);
@@ -44,18 +45,6 @@ const RotatingEarth = () => {
 
   // Create a sparse points geometry sampled from the processed texture to give a dotted effect
   const pointsGeometry = useMemo(() => {
-    if (!processedTexture || !processedTexture.image) return null;
-
-    const img = processedTexture.image as HTMLCanvasElement;
-    const w = img.width;
-    const h = img.height;
-    const tmpCanvas = document.createElement("canvas");
-    tmpCanvas.width = w;
-    tmpCanvas.height = h;
-    const tmpCtx = tmpCanvas.getContext("2d")!;
-    tmpCtx.drawImage(img, 0, 0);
-    const imgData = tmpCtx.getImageData(0, 0, w, h).data;
-
     const sphere = new SphereGeometry(1.002, 72, 72);
     const pos = sphere.getAttribute("position");
     const uv = sphere.getAttribute("uv");
@@ -63,25 +52,45 @@ const RotatingEarth = () => {
     const positions: number[] = [];
     const colors: number[] = [];
 
-    for (let i = 0; i < pos.count; i++) {
-      // reduce density for a dotted look
-      if (i % 3 !== 0) continue;
+    if (processedTexture && processedTexture.image) {
+      const img = processedTexture.image as HTMLCanvasElement;
+      const w = img.width;
+      const h = img.height;
+      const tmpCanvas = document.createElement("canvas");
+      tmpCanvas.width = w;
+      tmpCanvas.height = h;
+      const tmpCtx = tmpCanvas.getContext("2d")!;
+      tmpCtx.drawImage(img, 0, 0);
+      const imgData = tmpCtx.getImageData(0, 0, w, h).data;
 
-      const ux = uv.getX(i);
-      const uy = uv.getY(i);
-      const x = Math.floor(ux * (w - 1));
-      const y = Math.floor((1 - uy) * (h - 1));
-      const idx = (y * w + x) * 4;
-      const r = imgData[idx];
-      const g = imgData[idx + 1];
-      const b = imgData[idx + 2];
-      const gray = (r + g + b) / 3 / 255;
+      for (let i = 0; i < pos.count; i++) {
+        if (i % 3 !== 0) continue;
+        const ux = uv.getX(i);
+        const uy = uv.getY(i);
+        const x = Math.floor(ux * (w - 1));
+        const y = Math.floor((1 - uy) * (h - 1));
+        const idx = (y * w + x) * 4;
+        const r = imgData[idx];
+        const g = imgData[idx + 1];
+        const b = imgData[idx + 2];
+        const gray = (r + g + b) / 3 / 255;
 
-      positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
-
-      // map gray to a dark gray palette (lighter where texture is brighter)
-      const c = 0.12 + 0.6 * gray; // 0.12..0.72
-      colors.push(c, c, c);
+        positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+        const c = 0.12 + 0.6 * gray;
+        colors.push(c, c, c);
+      }
+    } else {
+      // Fallback procedural dotted texture when processed image isn't available
+      for (let i = 0; i < pos.count; i++) {
+        if (i % 4 !== 0) continue;
+        const y = pos.getY(i); // -1..1
+        // bias toward land-like clusters by using latitude
+        const latBias = 1 - Math.abs(y);
+        if (Math.random() > 0.18 * latBias) continue;
+        positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+        const c = 0.18 + Math.random() * 0.45;
+        colors.push(c, c, c);
+      }
     }
 
     const geom = new BufferGeometry();
@@ -112,7 +121,7 @@ const RotatingEarth = () => {
 
       {pointsGeometry && (
         <points geometry={pointsGeometry}>
-          <pointsMaterial size={0.008} vertexColors depthWrite={false} />
+          <pointsMaterial size={0.012} sizeAttenuation vertexColors depthWrite={false} />
         </points>
       )}
     </group>
@@ -122,14 +131,12 @@ const RotatingEarth = () => {
 const WorldMap = () => {
   return (
     <div className="relative w-full h-full rounded-full overflow-hidden bg-gradient-to-b from-slate-900 via-slate-950 to-black shadow-2xl shadow-black/60">
-      <Canvas
-        camera={{ position: [0, 0, 3.2], fov: 35 }}
-        gl={{ antialias: true, alpha: true }}
-      >
-        <ambientLight intensity={0.3} />
+      <Canvas className="w-full h-full" camera={{ position: [0, 0, 3.2], fov: 35 }} gl={{ antialias: true, alpha: true }}>
+        <ambientLight intensity={0.45} />
         <directionalLight position={[5, 3, 5]} intensity={0.8} color="#bfc7d1" />
         <directionalLight position={[-5, -3, -5]} intensity={0.25} color="#6b7280" />
         <RotatingEarth />
+        <OrbitControls enablePan={false} enableZoom enableRotate zoomSpeed={0.6} minDistance={1.6} maxDistance={6} />
       </Canvas>
       <div className="pointer-events-none absolute inset-0 rounded-full bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.03),transparent_25%)] opacity-12" />
       <div className="pointer-events-none absolute inset-0 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.02),transparent_60%)] opacity-18" />
