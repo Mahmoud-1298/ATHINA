@@ -146,8 +146,8 @@ const WorldMap = () => {
     >
       <Canvas className="w-full h-full cursor-grab active:cursor-grabbing" camera={{ position: [0, 0, 3.2], fov: 35 }} gl={{ antialias: true, alpha: true }}>
         <ambientLight intensity={0.65} />
-        <directionalLight position={[5, 3, 5]} intensity={1.0} color="#d3dce4" />
-        <directionalLight position={[-5, -3, -5]} intensity={0.35} color="#9ca3af" />
+        <directionalLight position={[5, 3, 5]} intensity={1.0} color="#191b1f09" />
+        <directionalLight position={[-5, -3, -5]} intensity={0.35} color="#08327a" />
         <RotatingEarth />
         <OrbitControls enablePan={true} enableZoom enableRotate zoomSpeed={0.6} minDistance={1.6} maxDistance={6} />
       </Canvas>
