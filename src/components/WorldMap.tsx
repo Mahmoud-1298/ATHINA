@@ -120,7 +120,7 @@ const RotatingEarth = () => {
         <sphereGeometry args={[1, 128, 128]} />
         <meshStandardMaterial
           map={(earthTexture as Texture) || undefined}
-          color="#ffffff"
+          color="#0e0d0d00"
           metalness={0}
           roughness={0.8}
           emissive="#000000"
