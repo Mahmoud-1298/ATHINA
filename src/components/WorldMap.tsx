@@ -5,30 +5,36 @@ import { OrbitControls } from "@react-three/drei";
 
 const RotatingEarth = () => {
   const groupRef = useRef<any>(null);
-  const [imageBitmap, setImageBitmap] = useState<ImageBitmap | null>(null);
+  const [earthImage, setEarthImage] = useState<HTMLImageElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
     const urls = [
-      "/textures/earth_atmos_2048.jpg",
       "https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg",
     ];
+
+    const loadImage = async (src: string) => {
+      return new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.src = src;
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+      });
+    };
 
     (async () => {
       for (const url of urls) {
         try {
-          const res = await fetch(url, { mode: "cors" });
-          if (!res.ok) throw new Error("fetch failed");
-          const blob = await res.blob();
-          const bitmap = await createImageBitmap(blob);
+          const img = await loadImage(url);
           if (!mounted) return;
-          setImageBitmap(bitmap);
+          setEarthImage(img);
           return;
         } catch (e) {
           // try next url
         }
       }
-      // no image loaded — leave imageBitmap null and fallback to procedural points
+      // no image loaded — leave earthImage null and fallback to procedural points
     })();
 
     return () => {
@@ -38,20 +44,20 @@ const RotatingEarth = () => {
 
   // Create a full-color globe texture so the map is clear and easy to read.
   const earthTexture = useMemo(() => {
-    if (!imageBitmap) return null;
-    const w = imageBitmap.width || 2048;
-    const h = imageBitmap.height || 1024;
+    if (!earthImage) return null;
+    const w = earthImage.width || 2048;
+    const h = earthImage.height || 1024;
 
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(imageBitmap as any, 0, 0, w, h);
+    ctx.drawImage(earthImage, 0, 0, w, h);
 
     const tex = new Texture(canvas as HTMLCanvasElement);
     tex.needsUpdate = true;
     return tex;
-  }, [imageBitmap]);
+  }, [earthImage]);
 
   // Create a sparse points geometry sampled from the globe texture to give a dotted effect.
   const pointsGeometry = useMemo(() => {
@@ -120,9 +126,9 @@ const RotatingEarth = () => {
         <sphereGeometry args={[1, 128, 128]} />
         <meshStandardMaterial
           map={(earthTexture as Texture) || undefined}
-          color="#0e0d0d00"
-          metalness={0}
-          roughness={0.8}
+          color="#ffffff"
+          metalness={0.05}
+          roughness={0.6}
           emissive="#000000"
           emissiveIntensity={0}
         />
@@ -145,9 +151,9 @@ const WorldMap = () => {
       className="relative w-full h-full rounded-full overflow-hidden bg-slate-950 shadow-2xl shadow-black/60"
     >
       <Canvas className="w-full h-full cursor-grab active:cursor-grabbing" camera={{ position: [0, 0, 3.2], fov: 35 }} gl={{ antialias: true, alpha: true }}>
-        <ambientLight intensity={0.65} />
-        <directionalLight position={[5, 3, 5]} intensity={1.0} color="#191b1f09" />
-        <directionalLight position={[-5, -3, -5]} intensity={0.35} color="#08327a" />
+        <ambientLight intensity={0.7} />
+        <directionalLight position={[5, 3, 5]} intensity={1.0} color="#e0e7ff" />
+        <directionalLight position={[-5, -3, -5]} intensity={0.4} color="#94a3b8" />
         <RotatingEarth />
         <OrbitControls enablePan={true} enableZoom enableRotate zoomSpeed={0.6} minDistance={1.6} maxDistance={6} />
       </Canvas>
