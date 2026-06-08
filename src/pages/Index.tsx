@@ -16,7 +16,7 @@ interface Message {
 }
 
 const BACKEND_CHAT_URL =
-  "https://athina-backend.onrender.com/api/chat";
+  "https://backend1-88nk.onrender.com/api/chat";
 
 const Index = () => {
   const [messages, setMessages] = useState<Message[]>([]);
