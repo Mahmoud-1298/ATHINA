@@ -1,7 +1,5 @@
 import { useState, useCallback, useRef, useEffect, FormEvent } from "react";
-import { useConversation } from "@elevenlabs/react";
 import { motion } from "framer-motion";
-import { supabase } from "../integrations/supabase/client.ts";
 import VoiceOrb from "../components/VoiceOrb.tsx";
 import StatusBar from "../components/StatusBar.tsx";
 import JarvisParticles from "../components/JarvisParticles.tsx";
@@ -15,8 +13,10 @@ interface Message {
   text: string;
 }
 
-const BACKEND_CHAT_URL =
-  "https://backend1-88nk.onrender.com/api/chat";
+const BACKEND_BASE_URL =
+  import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
+const BACKEND_CHAT_URL = `${BACKEND_BASE_URL}/api/chat`;
+const BACKEND_VOICE_URL = `${BACKEND_BASE_URL}/api/voice`;
 
 const Index = () => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -24,69 +24,146 @@ const Index = () => {
   const [partialText, setPartialText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<"ready" | "recording" | "processing" | "speaking">("ready");
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  /* ============================
-     VOICE (UNCHANGED)
-     ============================ */
-  const conversation = useConversation({
-    onMessage: (message: any) => {
-      if (message.type === "agent_response") {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: Date.now().toString(),
-            role: "agent",
-            text: message.agent_response_event?.agent_response || "",
-          },
-        ]);
-      } else if (message.type === "user_transcript") {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: Date.now().toString(),
-            role: "user",
-            text:
-              message.user_transcription_event?.user_transcript || "",
-          },
-        ]);
-      }
-    },
-    onError: (error) => {
-      console.error("Voice error:", error);
-    },
-  });
+  const isActive = isRecording || isProcessing || isSpeaking;
 
-  const startConversation = useCallback(async () => {
-    if (conversation.status === "connected") return;
+  useEffect(() => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
+      audioRef.current.onended = () => {
+        setVoiceStatus("ready");
+        setIsSpeaking(false);
+      };
+    }
+  }, []);
 
-    setIsConnecting(true);
+  const sendVoiceToBackend = useCallback(async (blob: Blob) => {
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      const { data } = await supabase.functions.invoke(
-        "elevenlabs-signed-url"
+      const arrayBuffer = await blob.arrayBuffer();
+      const base64 = btoa(
+        String.fromCharCode(...new Uint8Array(arrayBuffer))
       );
 
-      await conversation.startSession({
-        signedUrl: data?.signed_url,
+      const res = await fetch(BACKEND_VOICE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          audioBase64: base64,
+          sessionId: "ui-session",
+        }),
       });
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsConnecting(false);
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.error || "Voice backend request failed");
+      }
+
+      const textResponse = data.text || "";
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: "agent",
+          text: textResponse,
+        },
+      ]);
+
+      if (data.audioBase64) {
+        const url = `data:audio/mpeg;base64,${data.audioBase64}`;
+        setAudioUrl(url);
+
+        if (audioRef.current) {
+          audioRef.current.src = url;
+          await audioRef.current.play();
+          setVoiceStatus("speaking");
+          setIsSpeaking(true);
+        }
+      }
+    } catch (error) {
+      console.error("Voice backend error:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: "agent",
+          text: "Voice backend failed. Please try again.",
+        },
+      ]);
     }
-  }, [conversation]);
+  }, []);
 
-  const stopConversation = useCallback(async () => {
-    await conversation.endSession();
-  }, [conversation]);
+  const startVoiceRecording = useCallback(async () => {
+    setIsConnecting(true);
+    setVoiceStatus("recording");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      audioChunksRef.current = [];
 
-  const isActive = conversation.status === "connected";
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        setIsRecording(false);
+        setIsProcessing(true);
+        setVoiceStatus("processing");
+
+        const voiceBlob = new Blob(audioChunksRef.current, {
+          type: "audio/webm",
+        });
+
+        await sendVoiceToBackend(voiceBlob);
+
+        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        setIsProcessing(false);
+        setIsConnecting(false);
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setIsConnecting(false);
+    } catch (error) {
+      console.error("Voice recording error:", error);
+      setIsConnecting(false);
+      setIsRecording(false);
+      setVoiceStatus("ready");
+    }
+  }, [sendVoiceToBackend]);
+
+  const stopVoiceRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+  }, []);
 
   const handleOrbClick = () => {
-    if (isActive) stopConversation();
-    else startConversation();
+    if (isRecording) {
+      stopVoiceRecording();
+    } else if (!isProcessing && !isSpeaking) {
+      startVoiceRecording();
+    }
   };
 
   /* ============================
@@ -182,7 +259,7 @@ const Index = () => {
   return (
     <div className="relative flex flex-col items-center justify-center min-h-screen bg-background overflow-hidden">
       <JarvisParticles
-        isSpeaking={conversation.isSpeaking}
+        isSpeaking={isSpeaking}
         isActive={isActive}
       />
 
@@ -208,13 +285,13 @@ const Index = () => {
 
         <VoiceOrb
           isActive={isActive}
-          isSpeaking={conversation.isSpeaking}
+          isSpeaking={isSpeaking}
           onClick={handleOrbClick}
         />
 
         <StatusBar
-          status={conversation.status}
-          isSpeaking={conversation.isSpeaking}
+          status={voiceStatus}
+          isSpeaking={isSpeaking}
         />
       </div>
 
