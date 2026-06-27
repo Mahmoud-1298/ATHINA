@@ -211,7 +211,7 @@ const ArcLines = ({ isSpeaking }: { isSpeaking: boolean }) => {
 
 const JarvisParticles = ({ isSpeaking, isActive }: ParticleFieldProps) => {
   return (
-    <div className="fixed inset-0 z-0">
+    <div className="fixed inset-0 z-10">
       <Canvas
         camera={{ position: [0, 0, 10], fov: 60 }}
         dpr={[1, 2]}

@@ -115,7 +115,6 @@
   width: 100%;
   height: 100%;
   background: #020617;
-  border-radius: 1rem;
   z-index: 10;
 }
 
@@ -135,8 +134,8 @@
 
 .athina-map-marker {
   align-items: center;
-  background: rgba(16, 185, 129, 0.16);
-  border: 1px solid rgba(110, 231, 183, 0.8);
+  background: rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(148, 163, 184, 0.85);
   border-radius: 999px;
   display: flex;
   justify-content: center;
@@ -146,6 +145,42 @@
   width: 10px;
   height: 10px;
   border-radius: 999px;
-  background: #34d399;
-  box-shadow: 0 0 18px rgba(52, 211, 153, 0.9);
+  background: #cbd5e1;
+  box-shadow: 0 0 18px rgba(148, 163, 184, 0.85);
+}
+
+.athina-worldmap .leaflet-tile-pane {
+  filter: grayscale(1) contrast(1.45) brightness(0.38);
+}
+
+.athina-worldmap .leaflet-overlay-pane,
+.athina-worldmap .leaflet-marker-pane,
+.athina-worldmap .leaflet-popup-pane {
+  filter: grayscale(0.2);
+}
+
+.athina-worldmap-grain,
+.athina-worldmap-vignette,
+.athina-worldmap-dotmask {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+}
+
+.athina-worldmap-grain {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 0.5px, transparent 0.5px);
+  background-size: 3px 3px;
+  opacity: 0.08;
+  mix-blend-mode: soft-light;
+}
+
+.athina-worldmap-vignette {
+  background: radial-gradient(circle at center, rgba(2, 6, 23, 0.04) 20%, rgba(2, 6, 23, 0.7) 100%);
+}
+
+.athina-worldmap-dotmask {
+  background-image: radial-gradient(circle, rgba(203, 213, 225, 0.22) 0.8px, transparent 0.9px);
+  background-size: 8px 8px;
+  opacity: 0.12;
+  mix-blend-mode: screen;
 }

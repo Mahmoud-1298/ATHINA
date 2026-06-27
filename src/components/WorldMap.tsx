@@ -12,6 +12,8 @@ export interface MapTarget {
 
 interface WorldMapProps {
   target?: MapTarget | null;
+  className?: string;
+  isBackground?: boolean;
 }
 
 const FlyToTarget = ({ target }: WorldMapProps) => {
@@ -33,18 +35,39 @@ const markerIcon = L.divIcon({
   iconAnchor: [13, 13],
 });
 
-const WorldMap = ({ target }: WorldMapProps) => {
+const WorldMap = ({ target, className, isBackground = false }: WorldMapProps) => {
   const center = useMemo<[number, number]>(
     () => (target ? [target.lat, target.lng] : [25.2048, 55.2708]),
     [target]
   );
 
   return (
-    <div className="relative h-full w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-950 shadow-2xl shadow-black/80">
-      <MapContainer center={center} zoom={target ? 12 : 3} className="h-full w-full">
+    <div
+      className={`athina-worldmap relative h-full w-full overflow-hidden bg-slate-950 ${
+        isBackground ? "rounded-none border-0" : "rounded-3xl border border-white/10 shadow-2xl shadow-black/80"
+      } ${className || ""}`}
+    >
+      <MapContainer
+        center={center}
+        zoom={target ? 12 : 2.6}
+        className="h-full w-full"
+        zoomControl={false}
+        attributionControl={false}
+        dragging={!isBackground}
+        scrollWheelZoom={!isBackground}
+        doubleClickZoom={!isBackground}
+        touchZoom={!isBackground}
+        boxZoom={!isBackground}
+        keyboard={!isBackground}
+      >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"
+          url="https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png"
+        />
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png"
+          opacity={0.16}
         />
         <FlyToTarget target={target} />
         {target && (
@@ -58,9 +81,16 @@ const WorldMap = ({ target }: WorldMapProps) => {
           </Marker>
         )}
       </MapContainer>
-      <div className="pointer-events-none absolute left-4 top-4 rounded-full border border-white/10 bg-slate-950/85 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-200">
-        Map
-      </div>
+
+      <div className="athina-worldmap-grain" />
+      <div className="athina-worldmap-vignette" />
+      <div className="athina-worldmap-dotmask" />
+
+      {!isBackground && (
+        <div className="pointer-events-none absolute left-4 top-4 rounded-full border border-white/10 bg-slate-950/85 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-200">
+          Map
+        </div>
+      )}
     </div>
   );
 };
