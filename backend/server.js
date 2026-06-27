@@ -63,8 +63,176 @@ Return only valid JSON with this shape:
 
 Use "locate" when the user asks where something is, asks to find a place on the map, or asks for directions/location.
 Use "browse" when the user asks you to browse, open a site, search the web, research current information, or inspect a page.
+When you choose "browse", include a clear query string so the system can gather reliable web results.
 Use both actions when useful. Keep actions focused; do not create more than 3.
 `;
+
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 9000);
+
+const fetchWithTimeout = async (url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const cleanText = (value = "") =>
+  value
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const decodeDuckDuckGoUrl = (rawUrl = "") => {
+  try {
+    if (rawUrl.startsWith("/l/?")) {
+      const parsed = new URL(`https://duckduckgo.com${rawUrl}`);
+      const uddg = parsed.searchParams.get("uddg");
+      return uddg ? decodeURIComponent(uddg) : rawUrl;
+    }
+    return rawUrl;
+  } catch {
+    return rawUrl;
+  }
+};
+
+const extractDuckDuckGoHtmlResults = (html, limit = 5) => {
+  const blockRegex = /<div class="result__body">([\s\S]*?)<\/div>\s*<\/div>/g;
+  const out = [];
+
+  let match;
+  while ((match = blockRegex.exec(html)) !== null && out.length < limit) {
+    const block = match[1];
+    const linkMatch = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!linkMatch) continue;
+
+    const snippetMatch = block.match(/<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i);
+    const url = decodeDuckDuckGoUrl(linkMatch[1]);
+    if (!/^https?:\/\//i.test(url)) continue;
+
+    out.push({
+      title: cleanText(linkMatch[2]).slice(0, 180),
+      url,
+      snippet: cleanText(snippetMatch?.[1] || "").slice(0, 340),
+    });
+  }
+
+  return out;
+};
+
+const searchWebResults = async (query) => {
+  const htmlUrl = new URL("https://html.duckduckgo.com/html/");
+  htmlUrl.searchParams.set("q", query);
+
+  const htmlResponse = await fetchWithTimeout(htmlUrl.toString(), {
+    headers: {
+      "User-Agent": "ATHINA-Agent/1.0",
+      Accept: "text/html",
+    },
+  });
+
+  if (!htmlResponse.ok) {
+    throw new Error(`Web search failed with status ${htmlResponse.status}`);
+  }
+
+  const html = await htmlResponse.text();
+  const htmlResults = extractDuckDuckGoHtmlResults(html, 5);
+  if (htmlResults.length > 0) {
+    return htmlResults;
+  }
+
+  // Fallback to instant answer API when HTML result parsing yields nothing.
+  const apiUrl = new URL("https://api.duckduckgo.com/");
+  apiUrl.searchParams.set("q", query);
+  apiUrl.searchParams.set("format", "json");
+  apiUrl.searchParams.set("no_html", "1");
+  apiUrl.searchParams.set("skip_disambig", "1");
+
+  const apiResponse = await fetchWithTimeout(apiUrl.toString(), {
+    headers: { Accept: "application/json" },
+  });
+
+  if (!apiResponse.ok) {
+    throw new Error(`Web search fallback failed with status ${apiResponse.status}`);
+  }
+
+  const data = await apiResponse.json();
+  const topic = data.RelatedTopics?.find((item) => item.FirstURL);
+  const fallbackUrl =
+    data.AbstractURL || topic?.FirstURL || `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
+
+  return [
+    {
+      title: data.Heading || query,
+      url: fallbackUrl,
+      snippet: cleanText(data.AbstractText || topic?.Text || ""),
+    },
+  ];
+};
+
+const isLikelyIframeBlocked = (responseHeaders) => {
+  const xFrame = responseHeaders.get("x-frame-options") || "";
+  const csp = responseHeaders.get("content-security-policy") || "";
+
+  return /deny|sameorigin/i.test(xFrame) || /frame-ancestors\s+'none'|frame-ancestors\s+'self'/i.test(csp);
+};
+
+const fetchReadablePageText = async (url) => {
+  const pageResponse = await fetchWithTimeout(url, {
+    headers: {
+      "User-Agent": "ATHINA-Agent/1.0",
+      Accept: "text/html,application/xhtml+xml,text/plain",
+    },
+  });
+
+  const contentType = pageResponse.headers.get("content-type") || "";
+  if (!pageResponse.ok || !contentType.includes("text")) {
+    return { text: "", embedBlocked: isLikelyIframeBlocked(pageResponse.headers) };
+  }
+
+  const html = await pageResponse.text();
+  const text = cleanText(html).slice(0, 2600);
+  return {
+    text,
+    embedBlocked: isLikelyIframeBlocked(pageResponse.headers),
+  };
+};
+
+const buildBrowseSummary = (query, sources, pageText) => {
+  const topSources = sources.slice(0, 4);
+  const sourceLines = topSources
+    .map((item, idx) => {
+      const snippet = item.snippet ? ` - ${item.snippet}` : "";
+      return `${idx + 1}. ${item.title || item.url}${snippet}`;
+    })
+    .join("\n");
+
+  const extracted = pageText ? `\n\nExtracted context:\n${pageText.slice(0, 900)}` : "";
+  return `Web briefing for "${query}":\n${sourceLines}${extracted}`.trim();
+};
+
+const isGenericReply = (reply = "") => {
+  const normalized = reply.toLowerCase().trim();
+  return (
+    !normalized ||
+    normalized === "i've completed the request." ||
+    normalized === "i have completed the request." ||
+    normalized === "completed." ||
+    normalized === "done."
+  );
+};
 
 const getHistory = (sessionId) => conversations.get(sessionId) || [];
 
@@ -163,66 +331,42 @@ const normalizeUrl = (urlOrQuery) => {
   return null;
 };
 
-const searchWeb = async (query) => {
-  const url = new URL("https://api.duckduckgo.com/");
-  url.searchParams.set("q", query);
-  url.searchParams.set("format", "json");
-  url.searchParams.set("no_html", "1");
-  url.searchParams.set("skip_disambig", "1");
-
-  const response = await fetch(url.toString(), {
-    headers: { Accept: "application/json" },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Web search failed with status ${response.status}`);
-  }
-
-  const data = await response.json();
-  const topic = data.RelatedTopics?.find((item) => item.FirstURL);
-
-  return {
-    url: data.AbstractURL || topic?.FirstURL || `https://duckduckgo.com/?q=${encodeURIComponent(query)}`,
-    title: data.Heading || topic?.Text || query,
-    summary: data.AbstractText || topic?.Text || "",
-  };
-};
-
 const browseWeb = async ({ query, url }) => {
-  const target = normalizeUrl(url || query || "");
-  const search = target ? { url: target, title: target, summary: "" } : await searchWeb(query);
+  const searchQuery = query || url || "web research";
+  const target = normalizeUrl(url || "");
 
-  let pageText = search.summary || "";
+  const sources = target
+    ? [{ title: target, url: target, snippet: "Direct URL requested by user." }]
+    : await searchWebResults(searchQuery);
+
+  const primary = sources[0] || {
+    title: searchQuery,
+    url: `https://duckduckgo.com/?q=${encodeURIComponent(searchQuery)}`,
+    snippet: "",
+  };
+
+  let pageText = "";
+  let embedBlocked = false;
   try {
-    const pageResponse = await fetch(search.url, {
-      headers: {
-        "User-Agent": "ATHINA-Agent/1.0",
-        Accept: "text/html,application/xhtml+xml,text/plain",
-      },
-    });
-
-    const contentType = pageResponse.headers.get("content-type") || "";
-    if (pageResponse.ok && contentType.includes("text")) {
-      const html = await pageResponse.text();
-      pageText = html
-        .replace(/<script[\s\S]*?<\/script>/gi, " ")
-        .replace(/<style[\s\S]*?<\/style>/gi, " ")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 2500);
-    }
+    const pageResult = await fetchReadablePageText(primary.url);
+    pageText = pageResult.text;
+    embedBlocked = pageResult.embedBlocked;
   } catch {
-    // Some sites block server-side reads. The UI can still open the target URL.
+    // Some websites block bot reads. Source snippets still provide in-app results.
   }
+
+  const summary = buildBrowseSummary(searchQuery, sources, pageText);
 
   return {
     type: "browse",
-    query,
+    query: searchQuery,
     success: true,
-    url: search.url,
-    title: search.title,
-    summary: pageText,
+    url: primary.url,
+    title: primary.title,
+    summary,
+    sources,
+    embedBlocked,
+    fetchedAt: new Date().toISOString(),
   };
 };
 
@@ -284,8 +428,12 @@ app.post("/api/agent", async (req, res) => {
     const located = actionResults.find((item) => item.type === "locate" && item.success);
     const browsed = actionResults.find((item) => item.type === "browse" && item.success);
 
+    if (isGenericReply(reply) && browsed) {
+      reply = `I found web results for ${browsed.query || "your request"} and prepared an in-app briefing.`;
+    }
+
     if (located) reply += `\n\nI located ${located.name}.`;
-    if (browsed?.summary) reply += `\n\nBrowse result: ${browsed.summary.slice(0, 600)}`;
+    if (browsed?.summary) reply += `\n\nBrowse result: ${browsed.summary.slice(0, 1000)}`;
 
     saveTurn(sessionId, message, reply);
 

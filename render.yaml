@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: athina-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true

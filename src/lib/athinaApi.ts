@@ -16,6 +16,13 @@ export interface AgentBrowseAction {
   url?: string;
   title?: string;
   summary?: string;
+  sources?: Array<{
+    title: string;
+    url: string;
+    snippet?: string;
+  }>;
+  embedBlocked?: boolean;
+  fetchedAt?: string;
   error?: string;
 }
 

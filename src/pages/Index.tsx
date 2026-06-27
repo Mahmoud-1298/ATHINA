@@ -24,6 +24,12 @@ interface BrowserTarget {
   url: string;
   title: string;
   summary?: string;
+  sources?: Array<{
+    title: string;
+    url: string;
+    snippet?: string;
+  }>;
+  embedBlocked?: boolean;
 }
 
 const SESSION_ID = "ui-session";
@@ -110,8 +116,10 @@ const Index = () => {
           url: browseAction.url,
           title: browseAction.title || browseAction.query || browseAction.url,
           summary: browseAction.summary,
+          sources: browseAction.sources,
+          embedBlocked: browseAction.embedBlocked,
         });
-        setShowBrowserPreview(true);
+        setShowBrowserPreview(!browseAction.embedBlocked);
       }
     });
   }, []);
@@ -350,12 +358,36 @@ const Index = () => {
                 <span className="inline-flex h-2 w-2 rounded-full bg-cyan-400" />
                 Internet briefing
               </div>
+              {browserTarget.embedBlocked && (
+                <p className="mb-3 rounded-xl border border-amber-300/30 bg-amber-200/10 px-3 py-2 text-xs text-amber-200">
+                  This site blocks in-app embed preview. ATHINA is showing the extracted result and sources directly in the UI.
+                </p>
+              )}
               {browserTarget.summary ? (
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{browserTarget.summary}</ReactMarkdown>
               ) : (
                 <p className="text-slate-400">
                   ATHINA has found the page and is presenting the information directly in the UI. If the target site cannot be rendered safely in the preview, use the open button.
                 </p>
+              )}
+
+              {browserTarget.sources && browserTarget.sources.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <p className="text-[11px] uppercase tracking-[0.22em] text-cyan-300/70">Sources</p>
+                  {browserTarget.sources.slice(0, 4).map((source, index) => (
+                    <a
+                      key={`${source.url}-${index}`}
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block rounded-xl border border-cyan-300/10 bg-slate-900/80 px-3 py-2 transition hover:border-cyan-300/35 hover:bg-slate-900"
+                    >
+                      <p className="line-clamp-1 text-xs font-semibold text-cyan-100">{source.title || source.url}</p>
+                      <p className="line-clamp-1 text-[11px] text-cyan-300/70">{source.url}</p>
+                      {source.snippet && <p className="mt-1 line-clamp-2 text-xs text-slate-300">{source.snippet}</p>}
+                    </a>
+                  ))}
+                </div>
               )}
             </div>
 
