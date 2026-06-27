@@ -65,6 +65,7 @@ Use "locate" when the user asks where something is, asks to find a place on the 
 Use "browse" when the user asks you to browse, open a site, search the web, research current information, or inspect a page.
 When you choose "browse", include a clear query string so the system can gather reliable web results.
 Use both actions when useful. Keep actions focused; do not create more than 3.
+Do not reply with placeholders like "I've completed the request.".
 `;
 
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 9000);
@@ -232,6 +233,29 @@ const isGenericReply = (reply = "") => {
     normalized === "completed." ||
     normalized === "done."
   );
+};
+
+const inferFallbackActions = (message, actions = []) => {
+  if (Array.isArray(actions) && actions.length > 0) return actions;
+
+  const text = String(message || "").toLowerCase();
+  const inferred = [];
+
+  if (/\b(where|locate|location|map|pin|point me|directions?)\b/.test(text)) {
+    inferred.push({ type: "locate", query: message });
+  }
+
+  if (/\b(open|browse|search|look up|latest|news|youtube|google|website|site|web)\b/.test(text)) {
+    inferred.push({ type: "browse", query: message });
+  }
+
+  return inferred.slice(0, 3);
+};
+
+const formatSmartBrowseReply = (browsed) => {
+  if (!browsed) return "";
+  const subject = browsed.title || browsed.query || "the requested page";
+  return `Done. I opened ${subject} in ATHINA's browser panel and prepared a concise summary.`;
 };
 
 const getHistory = (sessionId) => conversations.get(sessionId) || [];
@@ -489,18 +513,29 @@ app.post("/api/agent", async (req, res) => {
     const data = await response.json();
     const rawText = data.choices?.[0]?.message?.content || "{}";
     const plan = safeJsonParse(rawText) || { reply: rawText, actions: [] };
-    const actionResults = await executeActions(plan.actions);
+    const plannedActions = inferFallbackActions(message, plan.actions);
+    const actionResults = await executeActions(plannedActions);
 
     let reply = plan.reply || "I've completed the request.";
     const located = actionResults.find((item) => item.type === "locate" && item.success);
     const browsed = actionResults.find((item) => item.type === "browse" && item.success);
 
     if (isGenericReply(reply) && browsed) {
-      reply = `I found web results for ${browsed.query || "your request"} and prepared an in-app briefing.`;
+      reply = formatSmartBrowseReply(browsed);
+    }
+
+    if (isGenericReply(reply) && located) {
+      reply = `Done. I pinned ${located.name || located.query || "the location"} on your map.`;
+    }
+
+    if (isGenericReply(reply) && !located && !browsed) {
+      reply = "I could not execute that action yet. Give me a clearer command like 'open youtube', 'search latest AI agent news', or 'locate Cairo on map'.";
     }
 
     if (located) reply += `\n\nI located ${located.name}.`;
-    if (browsed?.summary) reply += `\n\nBrowse result: ${browsed.summary.slice(0, 1000)}`;
+    if (browsed?.embedBlocked) {
+      reply += "\n\nThe target site blocks direct embed, so I kept the result in ATHINA's internal browser and briefing panel.";
+    }
 
     saveTurn(sessionId, message, reply);
 

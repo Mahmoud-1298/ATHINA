@@ -21,7 +21,7 @@ const FlyToTarget = ({ target }: WorldMapProps) => {
 
   useEffect(() => {
     if (target) {
-      map.flyTo([target.lat, target.lng], 12, { duration: 1.3 });
+      map.flyTo([target.lat, target.lng], 6.5, { duration: 1.4 });
     }
   }, [map, target]);
 
@@ -49,16 +49,16 @@ const WorldMap = ({ target, className, isBackground = false }: WorldMapProps) =>
     >
       <MapContainer
         center={center}
-        zoom={target ? 12 : 2.6}
+        zoom={target ? 6.5 : 2.6}
         className="h-full w-full"
         zoomControl={false}
         attributionControl={false}
-        dragging={!isBackground}
-        scrollWheelZoom={!isBackground}
-        doubleClickZoom={!isBackground}
-        touchZoom={!isBackground}
-        boxZoom={!isBackground}
-        keyboard={!isBackground}
+        dragging
+        scrollWheelZoom
+        doubleClickZoom
+        touchZoom
+        boxZoom
+        keyboard
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'

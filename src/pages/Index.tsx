@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, FormEvent } from "react";
 import { motion } from "framer-motion";
-import { ExternalLink, Send } from "lucide-react";
+import { ExternalLink, Send, X } from "lucide-react";
 import VoiceOrb from "../components/VoiceOrb.tsx";
 import StatusBar from "../components/StatusBar.tsx";
 import JarvisParticles from "../components/JarvisParticles.tsx";
@@ -32,14 +32,6 @@ interface BrowserTarget {
   }>;
   embedBlocked?: boolean;
   fetchedAt?: string;
-}
-
-interface ActivityEvent {
-  id: string;
-  kind: "command" | "browse" | "locate" | "system" | "error";
-  label: string;
-  details: string;
-  timestamp: string;
 }
 
 const SESSION_ID = "ui-session";
@@ -82,11 +74,12 @@ const Index = () => {
   const [mapTarget, setMapTarget] = useState<MapTarget | null>(null);
   const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
   const [showBrowserPreview, setShowBrowserPreview] = useState(true);
-  const [activityLog, setActivityLog] = useState<ActivityEvent[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const voiceSessionOpenRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const isSpeakingRef = useRef(false);
+  const isProcessingRef = useRef(false);
 
   const isActive = isVoiceSessionOpen || isRecording || isProcessing || isSpeaking;
 
@@ -95,10 +88,22 @@ const Index = () => {
       audioRef.current = new Audio();
       audioRef.current.onended = () => {
         setIsSpeaking(false);
+        isSpeakingRef.current = false;
         setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
+        if (voiceSessionOpenRef.current && !isProcessingRef.current) {
+          startVoiceRecording();
+        }
       };
     }
   }, []);
+
+  useEffect(() => {
+    isSpeakingRef.current = isSpeaking;
+  }, [isSpeaking]);
+
+  useEffect(() => {
+    isProcessingRef.current = isProcessing;
+  }, [isProcessing]);
 
   const addMessage = useCallback((role: Message["role"], text: string) => {
     setMessages((prev) => [
@@ -111,33 +116,17 @@ const Index = () => {
     ]);
   }, []);
 
-  const addActivity = useCallback(
-    (kind: ActivityEvent["kind"], label: string, details: string) => {
-      setActivityLog((prev) => [
-        {
-          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          kind,
-          label,
-          details,
-          timestamp: new Date().toISOString(),
-        },
-        ...prev,
-      ].slice(0, 40));
-    },
-    []
-  );
-
   const stopSpeechPlayback = useCallback((silent = false) => {
     if (!audioRef.current) return;
     audioRef.current.pause();
     audioRef.current.currentTime = 0;
     setIsSpeaking(false);
+    isSpeakingRef.current = false;
     setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
     if (!silent) {
       addMessage("agent", "Speech interrupted. Standing by.");
-      addActivity("system", "Speech Interrupted", "ATHINA audio output stopped by user command.");
     }
-  }, [addActivity, addMessage]);
+  }, [addMessage]);
 
   const applyActions = useCallback((actions: AgentAction[]) => {
     actions.forEach((action) => {
@@ -148,7 +137,6 @@ const Index = () => {
           lng: action.lng,
           query: action.query,
         });
-        addActivity("locate", "Map Action", `Pinned ${action.name || action.query || "target"} on map.`);
       }
 
       if (action.type === "browse" && action.success && action.url) {
@@ -162,26 +150,17 @@ const Index = () => {
           fetchedAt: browseAction.fetchedAt,
         });
         setShowBrowserPreview(!browseAction.embedBlocked);
-        addActivity(
-          "browse",
-          "Web Action",
-          browseAction.embedBlocked
-            ? `Prepared in-app briefing for ${browseAction.title || browseAction.query || "web result"}; direct embedding blocked by target site.`
-            : `Loaded in-app preview for ${browseAction.title || browseAction.query || "web result"}.`
-        );
       }
     });
-  }, [addActivity]);
+  }, []);
 
   const runAgent = useCallback(
     async (text: string, mode: "text" | "voice" = "text") => {
       setIsProcessing(true);
-      addActivity("command", "User Command", text);
       try {
         const result = await sendAgentMessage(text, SESSION_ID, mode);
         addMessage("agent", result.reply);
         applyActions(result.actions || []);
-        addActivity("system", "ATHINA Reply", result.reply.slice(0, 140));
         return result.reply;
       } catch (error) {
         console.error("Agent backend error:", error);
@@ -191,29 +170,36 @@ const Index = () => {
             : error.message
           : "ATHINA backend failed. Please try again.";
         addMessage("agent", message);
-        addActivity("error", "Execution Error", message);
         return message;
       } finally {
         setIsProcessing(false);
       }
     },
-    [addActivity, addMessage, applyActions]
+    [addMessage, applyActions]
   );
 
   const speakReply = useCallback(async (text: string) => {
     try {
+      stopRecognition();
       const data = await speakText(text);
       if (data.audioBase64 && audioRef.current) {
         audioRef.current.src = `data:audio/mpeg;base64,${data.audioBase64}`;
+        setIsSpeaking(true);
+        isSpeakingRef.current = true;
         await audioRef.current.play();
         setVoiceStatus("speaking");
-        setIsSpeaking(true);
       } else {
         setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
+        if (voiceSessionOpenRef.current && !isProcessingRef.current) {
+          startVoiceRecording();
+        }
       }
     } catch (error) {
       console.error("Speech synthesis error:", error);
       setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
+      if (voiceSessionOpenRef.current && !isProcessingRef.current) {
+        startVoiceRecording();
+      }
     }
   }, []);
 
@@ -264,7 +250,7 @@ const Index = () => {
 
         if (!transcript) return;
 
-        const stopIntent = /^(stop|pause|silence|be quiet|cancel|shut up|enough)$/i.test(transcript);
+        const stopIntent = /\b(stop|pause|silence|be quiet|cancel|shut up|enough)\b/i.test(transcript);
         if (stopIntent) {
           addMessage("user", transcript);
           stopSpeechPlayback();
@@ -291,10 +277,10 @@ const Index = () => {
       recognition.onend = () => {
         setIsRecording(false);
         setIsConnecting(false);
-        if (voiceSessionOpenRef.current) {
+        if (voiceSessionOpenRef.current && !isSpeakingRef.current && !isProcessingRef.current) {
           setVoiceStatus("listening");
           setTimeout(() => {
-            if (voiceSessionOpenRef.current && !isProcessing) {
+            if (voiceSessionOpenRef.current && !isProcessingRef.current && !isSpeakingRef.current) {
               startVoiceRecording();
             }
           }, 500);
@@ -311,7 +297,7 @@ const Index = () => {
       setVoiceStatus("ready");
       addMessage("agent", "Microphone access failed. Please check browser permissions.");
     }
-  }, [addMessage, isProcessing, isSpeaking, runAgent, speakReply, stopSpeechPlayback]);
+  }, [addMessage, isSpeaking, runAgent, speakReply, stopSpeechPlayback]);
 
   const openVoiceSession = useCallback(() => {
     if (voiceSessionOpenRef.current) return;
@@ -319,9 +305,8 @@ const Index = () => {
     setIsVoiceSessionOpen(true);
     setVoiceStatus("listening");
     addMessage("agent", "ATHINA voice session opened. Speak anytime.");
-    addActivity("system", "Voice Session", "Voice session opened.");
     startVoiceRecording();
-  }, [addActivity, addMessage, startVoiceRecording]);
+  }, [addMessage, startVoiceRecording]);
 
   const closeVoiceSession = useCallback(() => {
     stopSpeechPlayback(true);
@@ -330,8 +315,7 @@ const Index = () => {
     setVoiceStatus("ready");
     stopRecognition();
     addMessage("agent", "ATHINA voice session closed.");
-    addActivity("system", "Voice Session", "Voice session closed.");
-  }, [addActivity, addMessage, stopRecognition, stopSpeechPlayback]);
+  }, [addMessage, stopRecognition, stopSpeechPlayback]);
 
   const handleOrbClick = () => {
     if (isVoiceSessionOpen) {
@@ -346,7 +330,7 @@ const Index = () => {
     const userMessage = inputText.trim();
     if (!userMessage) return;
 
-    const stopIntent = /^(stop|pause|silence|be quiet|cancel|shut up|enough)$/i.test(userMessage);
+    const stopIntent = /\b(stop|pause|silence|be quiet|cancel|shut up|enough)\b/i.test(userMessage);
     if (stopIntent) {
       addMessage("user", userMessage);
       setInputText("");
@@ -367,7 +351,7 @@ const Index = () => {
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background">
-      <div className="pointer-events-none absolute inset-0 z-0">
+      <div className="absolute inset-0 z-0">
         <WorldMap target={mapTarget} isBackground className="h-full w-full" />
       </div>
 
@@ -408,6 +392,14 @@ const Index = () => {
               <div className="truncate font-mono text-[10px] text-cyan-300/60">{browserTarget.url}</div>
             </div>
             <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setBrowserTarget(null)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-red-300/20 bg-red-500/10 text-red-200 transition hover:bg-red-500/20"
+                title="Close browser panel"
+              >
+                <X className="h-4 w-4" />
+              </button>
               <button
                 type="button"
                 onClick={() => setShowBrowserPreview((prev) => !prev)}
@@ -484,52 +476,6 @@ const Index = () => {
           </div>
         </motion.div>
       )}
-
-      <div className="absolute bottom-6 left-6 z-40 w-[min(420px,calc(100%-3rem))] rounded-3xl border border-cyan-300/15 bg-slate-950/92 shadow-2xl shadow-black/60 backdrop-blur-xl">
-        <div className="border-b border-cyan-300/15 px-4 py-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[11px] uppercase tracking-[0.25em] text-cyan-200">Live Browser Mode</p>
-            <p className="text-[10px] font-mono text-cyan-300/60">{browserTarget?.fetchedAt ? new Date(browserTarget.fetchedAt).toLocaleTimeString() : "idle"}</p>
-          </div>
-        </div>
-
-        <div className="grid max-h-[300px] grid-cols-1 gap-3 overflow-y-auto p-4">
-          <div className="rounded-2xl border border-cyan-300/10 bg-slate-900/80 p-3">
-            <p className="mb-2 text-[11px] uppercase tracking-[0.22em] text-cyan-300/70">Key Highlights</p>
-            {browserTarget?.sources && browserTarget.sources.length > 0 ? (
-              <div className="space-y-2">
-                {browserTarget.sources.slice(0, 3).map((source, idx) => (
-                  <div key={`${source.url}-${idx}`} className="rounded-lg border border-cyan-300/10 bg-slate-950/80 p-2">
-                    <p className="line-clamp-1 text-xs font-semibold text-cyan-100">{source.title}</p>
-                    <p className="line-clamp-2 text-xs text-slate-300">{source.snippet || "No snippet available."}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-slate-400">No active web highlights yet. Ask ATHINA to browse anything to populate this panel.</p>
-            )}
-          </div>
-
-          <div className="rounded-2xl border border-cyan-300/10 bg-slate-900/80 p-3">
-            <p className="mb-2 text-[11px] uppercase tracking-[0.22em] text-cyan-300/70">Action Timeline</p>
-            {activityLog.length > 0 ? (
-              <div className="space-y-2">
-                {activityLog.slice(0, 8).map((entry) => (
-                  <div key={entry.id} className="rounded-lg border border-white/10 bg-slate-950/75 p-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="line-clamp-1 text-xs font-semibold text-white/90">{entry.label}</p>
-                      <p className="text-[10px] font-mono text-cyan-300/60">{new Date(entry.timestamp).toLocaleTimeString()}</p>
-                    </div>
-                    <p className="line-clamp-2 text-xs text-slate-300">{entry.details}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-slate-400">Timeline is waiting for your first command.</p>
-            )}
-          </div>
-        </div>
-      </div>
 
       <div className="absolute bottom-6 right-6 z-40 w-[min(430px,calc(100%-3rem))] rounded-lg border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/40 backdrop-blur-xl">
         <div ref={scrollRef} className="max-h-[320px] space-y-3 overflow-y-auto px-4 py-4">
