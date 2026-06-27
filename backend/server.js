@@ -331,6 +331,40 @@ const normalizeUrl = (urlOrQuery) => {
   return null;
 };
 
+const escapeHtml = (value = "") =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const toPreviewHtml = (targetUrl, rawHtml) => {
+  const safeTitle = escapeHtml(targetUrl);
+  const body = rawHtml
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<meta[^>]+http-equiv=["']content-security-policy["'][^>]*>/gi, "")
+    .replace(/<meta[^>]+http-equiv=["']x-frame-options["'][^>]*>/gi, "");
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ATHINA Preview</title>
+  <base href="${escapeHtml(targetUrl)}" />
+  <style>
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b1120;color:#e2e8f0;}
+    .athina-preview-top{position:sticky;top:0;z-index:10;padding:10px 12px;background:#020617;border-bottom:1px solid #1f2937;font-size:12px;color:#93c5fd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  </style>
+</head>
+<body>
+  <div class="athina-preview-top">ATHINA in-app preview: ${safeTitle}</div>
+  ${body}
+</body>
+</html>`;
+};
+
 const browseWeb = async ({ query, url }) => {
   const searchQuery = query || url || "web research";
   const target = normalizeUrl(url || "");
@@ -392,11 +426,44 @@ const executeActions = async (actions = []) => {
 };
 
 app.get("/", (_req, res) => {
-  res.json({ ok: true, service: "ATHINA backend", endpoints: ["/health", "/api/agent", "/api/chat", "/api/speak", "/api/voice"] });
+  res.json({ ok: true, service: "ATHINA backend", endpoints: ["/health", "/api/agent", "/api/chat", "/api/speak", "/api/voice", "/api/preview"] });
 });
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
+});
+
+app.get("/api/preview", async (req, res) => {
+  try {
+    const target = normalizeUrl(String(req.query.url || ""));
+    if (!target) {
+      return res.status(400).send("Invalid preview URL");
+    }
+
+    const response = await fetchWithTimeout(target, {
+      headers: {
+        "User-Agent": "ATHINA-Agent/1.0",
+        Accept: "text/html,application/xhtml+xml,text/plain",
+      },
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).send(`Failed to fetch ${target}`);
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("text/html")) {
+      const text = await response.text();
+      return res
+        .type("text/html")
+        .send(`<pre style="white-space:pre-wrap;background:#020617;color:#e2e8f0;padding:12px;">${escapeHtml(text.slice(0, 120000))}</pre>`);
+    }
+
+    const html = await response.text();
+    res.type("text/html").send(toPreviewHtml(target, html));
+  } catch (error) {
+    res.status(500).send(`Preview failed: ${escapeHtml(error.message || "unknown error")}`);
+  }
 });
 
 app.post("/api/agent", async (req, res) => {

@@ -10,6 +10,7 @@ import remarkGfm from "remark-gfm";
 import {
   AgentAction,
   AgentBrowseAction,
+  BACKEND_BASE_URL,
   sendAgentMessage,
   speakText,
 } from "../lib/athinaApi.ts";
@@ -42,6 +43,7 @@ interface SpeechRecognition extends EventTarget {
   lang: string;
   start: () => void;
   stop: () => void;
+  abort?: () => void;
   onresult: ((event: SpeechRecognitionEvent) => void) | null;
   onerror: (() => void) | null;
   onend: (() => void) | null;
@@ -98,6 +100,17 @@ const Index = () => {
       },
     ]);
   }, []);
+
+  const stopSpeechPlayback = useCallback((silent = false) => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    audioRef.current.currentTime = 0;
+    setIsSpeaking(false);
+    setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
+    if (!silent) {
+      addMessage("agent", "Speech interrupted. Standing by.");
+    }
+  }, [addMessage]);
 
   const applyActions = useCallback((actions: AgentAction[]) => {
     actions.forEach((action) => {
@@ -178,6 +191,9 @@ const Index = () => {
   }, []);
 
   const startVoiceRecording = useCallback(async () => {
+    if (isSpeaking) {
+      stopSpeechPlayback(true);
+    }
     setIsConnecting(true);
     setVoiceStatus("listening");
     try {
@@ -208,6 +224,14 @@ const Index = () => {
           .trim();
 
         if (!transcript) return;
+
+        const stopIntent = /^(stop|pause|silence|be quiet|cancel|shut up|enough)$/i.test(transcript);
+        if (stopIntent) {
+          addMessage("user", transcript);
+          stopSpeechPlayback();
+          setIsRecording(false);
+          return;
+        }
 
         addMessage("user", transcript);
         setIsRecording(false);
@@ -248,7 +272,7 @@ const Index = () => {
       setVoiceStatus("ready");
       addMessage("agent", "Microphone access failed. Please check browser permissions.");
     }
-  }, [addMessage, isProcessing, runAgent, speakReply]);
+  }, [addMessage, isProcessing, isSpeaking, runAgent, speakReply, stopSpeechPlayback]);
 
   const openVoiceSession = useCallback(() => {
     if (voiceSessionOpenRef.current) return;
@@ -260,12 +284,13 @@ const Index = () => {
   }, [addMessage, startVoiceRecording]);
 
   const closeVoiceSession = useCallback(() => {
+    stopSpeechPlayback(true);
     voiceSessionOpenRef.current = false;
     setIsVoiceSessionOpen(false);
     setVoiceStatus("ready");
     stopRecognition();
     addMessage("agent", "ATHINA voice session closed.");
-  }, [addMessage, stopRecognition]);
+  }, [addMessage, stopRecognition, stopSpeechPlayback]);
 
   const handleOrbClick = () => {
     if (isVoiceSessionOpen) {
@@ -279,6 +304,14 @@ const Index = () => {
     event.preventDefault();
     const userMessage = inputText.trim();
     if (!userMessage) return;
+
+    const stopIntent = /^(stop|pause|silence|be quiet|cancel|shut up|enough)$/i.test(userMessage);
+    if (stopIntent) {
+      addMessage("user", userMessage);
+      setInputText("");
+      stopSpeechPlayback();
+      return;
+    }
 
     addMessage("user", userMessage);
     setInputText("");
@@ -393,7 +426,11 @@ const Index = () => {
 
             <div className="overflow-hidden rounded-3xl border border-cyan-300/10 bg-slate-900/90 shadow-inner shadow-cyan-500/5">
               {showBrowserPreview ? (
-                <iframe className="h-full w-full bg-slate-950" src={browserTarget.url} title={browserTarget.title} />
+                <iframe
+                  className="h-full w-full bg-slate-950"
+                  src={`${BACKEND_BASE_URL}/api/preview?url=${encodeURIComponent(browserTarget.url)}`}
+                  title={browserTarget.title}
+                />
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-slate-400">
                   <span className="text-sm font-semibold text-slate-100">Preview paused</span>
