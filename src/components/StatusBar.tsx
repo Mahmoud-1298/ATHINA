@@ -1,40 +1,37 @@
 import { motion } from "framer-motion";
 
-const G = "84 65% 44%";
-
-
 const StatusBar = ({ status, isSpeaking }: { status: string; isSpeaking: boolean }) => {
   const getStatusText = () => {
-    if (status === "connected" && isSpeaking) return "Agent speaking...";
-    if (status === "connected") return "Listening...";
-    return "Ready";
+    switch (status) {
+      case "listening":
+        return "ATHINA voice session live";
+      case "processing":
+        return "Processing your request";
+      case "speaking":
+        return "ATHINA is speaking";
+      case "ready":
+        return "Ready for your next command";
+      default:
+        return "Voice session closed";
+    }
   };
+
+  const isActive = status === "listening" || status === "processing" || status === "speaking";
+  const dotColor = isActive ? "#3EE5FF" : "#6B7280";
 
   return (
     <motion.div
-      className="flex items-center gap-2 px-5 py-2 rounded-full border border-border/40 bg-card/20 backdrop-blur-md"
-      initial={{ opacity: 0, y: 10 }}
+      className="flex items-center gap-3 rounded-full border border-white/10 bg-slate-950/80 px-4 py-2 text-white/80 shadow-lg shadow-cyan-500/10 backdrop-blur-xl"
+      initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
     >
-      <motion.div
-        className="w-1.5 h-1.5 rounded-full"
-        style={{
-          backgroundColor: status === "connected" ? `hsl(${G})` : "hsl(0 0% 30%)",
-        }}
-        animate={
-          status === "connected"
-            ? {
-                boxShadow: [
-                  "0 0 4px hsl(35 90% 52% / 0.4)",
-                  "0 0 10px hsl(35 90% 52% / 0.6)",
-                  "0 0 4px hsl(35 90% 52% / 0.4)",
-                ],
-              }
-            : {}
-        }
+      <motion.span
+        className="inline-flex h-2.5 w-2.5 rounded-full"
+        style={{ backgroundColor: dotColor }}
+        animate={isActive ? { scale: [1, 1.4, 1] } : { scale: 1 }}
         transition={{ duration: 1.5, repeat: Infinity }}
       />
-      <span className="text-[10px] font-mono text-muted-foreground tracking-[0.2em] uppercase">
+      <span className="text-[11px] font-mono uppercase tracking-[0.24em]">
         {getStatusText()}
       </span>
     </motion.div>

@@ -29,24 +29,53 @@ export interface AgentResponse {
   timestamp: string;
 }
 
-export const BACKEND_BASE_URL =
-  import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
+const BACKEND_ENV_URL = [
+  import.meta.env.VITE_BACKEND_URL,
+  import.meta.env.VITE_BACKEND_UR,
+  import.meta.env.BACKEND_URL,
+  import.meta.env.BACKEND_UR,
+]
+  .filter(Boolean)
+  .map((value) => String(value).trim())
+  .find(Boolean) || "";
+
+const DEFAULT_BACKEND_URL = BACKEND_ENV_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
+
+export const BACKEND_BASE_URL = DEFAULT_BACKEND_URL;
+
+const getFetchError = (url: string, response: Response, body: any) => {
+  const details = body?.details || body?.error || response.statusText || "Unknown error";
+  return new Error(
+    `Failed to fetch ${url}: ${details} (${response.status}).\n` +
+    `Front-end backend URL is ${BACKEND_BASE_URL}. Set VITE_BACKEND_URL in your frontend environment.`
+  );
+};
+
+const parseJsonSafe = async (response: Response) => {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+};
 
 export const sendAgentMessage = async (
   message: string,
   sessionId = "ui-session",
   mode: "text" | "voice" = "text"
 ): Promise<AgentResponse> => {
-  const response = await fetch(`${BACKEND_BASE_URL}/api/agent`, {
+  const url = `${BACKEND_BASE_URL}/api/agent`;
+  const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, sessionId, mode }),
   });
 
-  const data = await response.json();
+  const data = await parseJsonSafe(response);
 
   if (!response.ok) {
-    throw new Error(data?.details || data?.error || "ATHINA backend request failed");
+    throw getFetchError(url, response, data);
   }
 
   return data;

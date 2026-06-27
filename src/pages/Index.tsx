@@ -60,21 +60,24 @@ const Index = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState<"ready" | "recording" | "processing" | "speaking">("ready");
+  const [voiceStatus, setVoiceStatus] = useState<"ready" | "listening" | "recording" | "processing" | "speaking">("ready");
+  const [isVoiceSessionOpen, setIsVoiceSessionOpen] = useState(false);
   const [mapTarget, setMapTarget] = useState<MapTarget | null>(null);
   const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
+  const [showBrowserPreview, setShowBrowserPreview] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const voiceSessionOpenRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const isActive = isRecording || isProcessing || isSpeaking;
+  const isActive = isVoiceSessionOpen || isRecording || isProcessing || isSpeaking;
 
   useEffect(() => {
     if (!audioRef.current) {
       audioRef.current = new Audio();
       audioRef.current.onended = () => {
-        setVoiceStatus("ready");
         setIsSpeaking(false);
+        setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
       };
     }
   }, []);
@@ -108,6 +111,7 @@ const Index = () => {
           title: browseAction.title || browseAction.query || browseAction.url,
           summary: browseAction.summary,
         });
+        setShowBrowserPreview(true);
       }
     });
   }, []);
@@ -122,7 +126,11 @@ const Index = () => {
         return result.reply;
       } catch (error) {
         console.error("Agent backend error:", error);
-        const message = error instanceof Error ? error.message : "ATHINA backend failed. Please try again.";
+        const message = error instanceof Error
+          ? error.message.includes("Failed to fetch")
+            ? "ATHINA backend unreachable. Check backend deployment or your VITE_BACKEND_URL."
+            : error.message
+          : "ATHINA backend failed. Please try again.";
         addMessage("agent", message);
         return message;
       } finally {
@@ -141,17 +149,29 @@ const Index = () => {
         setVoiceStatus("speaking");
         setIsSpeaking(true);
       } else {
-        setVoiceStatus("ready");
+        setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
       }
     } catch (error) {
       console.error("Speech synthesis error:", error);
-      setVoiceStatus("ready");
+      setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
     }
+  }, []);
+
+  const stopRecognition = useCallback(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.onresult = null;
+      recognitionRef.current.onend = null;
+      recognitionRef.current.onerror = null;
+      recognitionRef.current.abort?.();
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    setIsRecording(false);
   }, []);
 
   const startVoiceRecording = useCallback(async () => {
     setIsConnecting(true);
-    setVoiceStatus("recording");
+    setVoiceStatus("listening");
     try {
       const Recognition =
         ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition) as
@@ -161,7 +181,9 @@ const Index = () => {
       if (!Recognition) {
         addMessage("agent", "Speech recognition is not available in this browser. Please use the text box.");
         setIsConnecting(false);
+        setIsVoiceSessionOpen(false);
         setVoiceStatus("ready");
+        voiceSessionOpenRef.current = false;
         return;
       }
 
@@ -192,12 +214,20 @@ const Index = () => {
         addMessage("agent", "I could not capture your voice request. Please try again or use text.");
         setIsRecording(false);
         setIsConnecting(false);
-        setVoiceStatus("ready");
+        setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
       };
 
       recognition.onend = () => {
         setIsRecording(false);
         setIsConnecting(false);
+        if (voiceSessionOpenRef.current) {
+          setVoiceStatus("listening");
+          setTimeout(() => {
+            if (voiceSessionOpenRef.current && !isProcessing) {
+              startVoiceRecording();
+            }
+          }, 500);
+        }
       };
 
       recognition.start();
@@ -210,20 +240,30 @@ const Index = () => {
       setVoiceStatus("ready");
       addMessage("agent", "Microphone access failed. Please check browser permissions.");
     }
-  }, [addMessage, runAgent, speakReply]);
+  }, [addMessage, isProcessing, runAgent, speakReply]);
 
-  const stopVoiceRecording = useCallback(() => {
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
-    setIsRecording(false);
+  const openVoiceSession = useCallback(() => {
+    if (voiceSessionOpenRef.current) return;
+    voiceSessionOpenRef.current = true;
+    setIsVoiceSessionOpen(true);
+    setVoiceStatus("listening");
+    addMessage("agent", "ATHINA voice session opened. Speak anytime.");
+    startVoiceRecording();
+  }, [addMessage, startVoiceRecording]);
+
+  const closeVoiceSession = useCallback(() => {
+    voiceSessionOpenRef.current = false;
+    setIsVoiceSessionOpen(false);
     setVoiceStatus("ready");
-  }, []);
+    stopRecognition();
+    addMessage("agent", "ATHINA voice session closed.");
+  }, [addMessage, stopRecognition]);
 
   const handleOrbClick = () => {
-    if (isRecording) {
-      stopVoiceRecording();
-    } else if (!isProcessing && !isSpeaking) {
-      startVoiceRecording();
+    if (isVoiceSessionOpen) {
+      closeVoiceSession();
+    } else {
+      openVoiceSession();
     }
   };
 
@@ -248,9 +288,9 @@ const Index = () => {
       <JarvisParticles isSpeaking={isSpeaking} isActive={isActive} />
 
       <motion.header className="fixed left-0 right-0 top-0 z-20 flex items-center justify-between px-6 py-4">
-        <span className="font-mono text-[10px] tracking-[0.4em] text-green-400/60">ATHINA v2</span>
+        <span className="font-mono text-[10px] tracking-[0.4em] text-cyan-300/70">ATHINA v2</span>
         <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-white/35">
-          {isConnecting ? "connecting" : isProcessing ? "processing" : "online"}
+          {isConnecting ? "connecting" : isProcessing ? "processing" : isVoiceSessionOpen ? "voice session live" : "online"}
         </span>
       </motion.header>
 
@@ -275,24 +315,64 @@ const Index = () => {
       </div>
 
       {browserTarget && (
-        <div className="absolute left-6 top-20 z-40 h-[min(34rem,calc(100vh-11rem))] w-[min(42rem,calc(100%-3rem))] overflow-hidden rounded-lg border border-cyan-300/20 bg-slate-950/95 shadow-2xl shadow-black/50 backdrop-blur-xl">
-          <div className="flex h-11 items-center justify-between border-b border-cyan-300/15 px-3">
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="absolute left-6 top-20 z-40 h-[min(36rem,calc(100vh-10rem))] w-[min(46rem,calc(100%-3rem))] overflow-hidden rounded-3xl border border-cyan-300/20 bg-slate-950/95 shadow-2xl shadow-black/70 backdrop-blur-xl"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-cyan-300/15 px-4 py-3">
             <div className="min-w-0">
-              <div className="truncate text-sm text-cyan-100">{browserTarget.title}</div>
-              <div className="truncate font-mono text-[10px] text-cyan-300/50">{browserTarget.url}</div>
+              <div className="truncate text-sm font-semibold text-cyan-100">{browserTarget.title}</div>
+              <div className="truncate font-mono text-[10px] text-cyan-300/60">{browserTarget.url}</div>
             </div>
-            <a
-              className="ml-3 inline-flex h-8 w-8 items-center justify-center rounded border border-cyan-300/20 text-cyan-200 hover:bg-cyan-300/10"
-              href={browserTarget.url}
-              target="_blank"
-              rel="noreferrer"
-              title="Open page"
-            >
-              <ExternalLink className="h-4 w-4" />
-            </a>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowBrowserPreview((prev) => !prev)}
+                className="rounded-full border border-cyan-300/20 bg-cyan-400/5 px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-cyan-100 transition hover:bg-cyan-400/10"
+              >
+                {showBrowserPreview ? "Summary" : "Preview"}
+              </button>
+              <a
+                className="inline-flex h-9 items-center justify-center rounded-full border border-cyan-300/20 bg-cyan-500/10 px-3 text-[11px] uppercase tracking-[0.2em] text-cyan-100 transition hover:bg-cyan-500/15"
+                href={browserTarget.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open page
+              </a>
+            </div>
           </div>
-          <iframe className="h-[calc(100%-2.75rem)] w-full bg-white" src={browserTarget.url} title={browserTarget.title} />
-        </div>
+
+          <div className="grid h-[calc(100%-3.25rem)] grid-cols-1 gap-3 p-4 md:grid-cols-[1.05fr_0.95fr]">
+            <div className="rounded-3xl border border-cyan-300/10 bg-slate-950/90 p-4 text-sm leading-6 text-slate-100 shadow-inner shadow-cyan-500/5">
+              <div className="mb-3 flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-cyan-300/70">
+                <span className="inline-flex h-2 w-2 rounded-full bg-cyan-400" />
+                Internet briefing
+              </div>
+              {browserTarget.summary ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{browserTarget.summary}</ReactMarkdown>
+              ) : (
+                <p className="text-slate-400">
+                  ATHINA has found the page and is presenting the information directly in the UI. If the target site cannot be rendered safely in the preview, use the open button.
+                </p>
+              )}
+            </div>
+
+            <div className="overflow-hidden rounded-3xl border border-cyan-300/10 bg-slate-900/90 shadow-inner shadow-cyan-500/5">
+              {showBrowserPreview ? (
+                <iframe className="h-full w-full bg-slate-950" src={browserTarget.url} title={browserTarget.title} />
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-slate-400">
+                  <span className="text-sm font-semibold text-slate-100">Preview paused</span>
+                  <p className="max-w-sm text-[13px] leading-6">
+                    ATHINA is still holding the browse session open. Switch back to preview to render the page inside the application.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </motion.div>
       )}
 
       <div className="absolute bottom-6 right-6 z-40 w-[min(430px,calc(100%-3rem))] rounded-lg border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/40 backdrop-blur-xl">
