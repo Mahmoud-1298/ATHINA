@@ -100,3 +100,52 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
+
+@keyframes globeRotate {
+  0% { transform: rotateY(0deg); }
+  100% { transform: rotateY(360deg); }
+}
+
+.animate-globeRotate {
+  animation: globeRotate 30s linear infinite;
+}
+
+/* Leaflet Map Styles */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  background: #020617;
+  border-radius: 1rem;
+  z-index: 10;
+}
+
+.leaflet-control-container,
+.leaflet-bottom,
+.leaflet-top {
+  display: none !important;
+}
+
+.leaflet-container .leaflet-pane {
+  background: transparent !important;
+}
+
+.leaflet-control {
+  display: none !important;
+}
+
+.athina-map-marker {
+  align-items: center;
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(110, 231, 183, 0.8);
+  border-radius: 999px;
+  display: flex;
+  justify-content: center;
+}
+
+.athina-map-marker-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #34d399;
+  box-shadow: 0 0 18px rgba(52, 211, 153, 0.9);
+}
