@@ -1,6 +1,6 @@
 import { safeJsonParse } from "./helpers.js";
 
-const PRIMARY_MODEL = process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash-lite";
+const PRIMARY_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
 const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL || "openai/gpt-oss-20b";
 const DEFAULT_MODEL = PRIMARY_MODEL;
 const RESPONSE_CACHE = new Map();
@@ -52,7 +52,43 @@ export const callOpenRouter = async (payload, maxRetries = 3) => {
   throw new Error("OpenRouter request failed after retries.");
 };
 
-const buildPayload = (model, messages, temperature, maxTokens, jsonMode) => {
+const callGemini = async (model, payload, maxRetries = 3) => {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error("Missing GEMINI_API_KEY environment variable.");
+  }
+
+  const modelName = model.startsWith("models/") ? model : "models/" + model;
+  const url =
+    "https://generativelanguage.googleapis.com/v1beta/" +
+    modelName +
+    ":generateContent?key=" +
+    encodeURIComponent(process.env.GEMINI_API_KEY);
+
+  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.status === 429 && attempt < maxRetries) {
+      const retryAfter = Number(response.headers.get("retry-after")) || Math.pow(2, attempt);
+      await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+      continue;
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error("Gemini error " + response.status + ": " + errorText);
+    }
+
+    return response;
+  }
+
+  throw new Error("Gemini request failed after retries.");
+};
+
+const buildOpenRouterPayload = (model, messages, temperature, maxTokens, jsonMode) => {
   let adjustedMessages = messages;
   // Some lightweight models may not support response_format; keep JSON constraints in-system either way
   const useResponseFormat = jsonMode && model !== "openrouter/free";
@@ -71,10 +107,68 @@ const buildPayload = (model, messages, temperature, maxTokens, jsonMode) => {
   return payload;
 };
 
+const buildGeminiPayload = (messages, temperature, maxTokens, jsonMode) => {
+  const systemMessages = [];
+  const contents = [];
+
+  for (const message of messages) {
+    if (!message?.content) continue;
+
+    if (message.role === "system") {
+      systemMessages.push(message.content);
+      continue;
+    }
+
+    const role = message.role === "assistant" ? "model" : "user";
+    contents.push({ role, parts: [{ text: String(message.content) }] });
+  }
+
+  if (contents.length === 0) {
+    contents.push({ role: "user", parts: [{ text: "Continue." }] });
+  }
+
+  const systemInstructionParts = [...systemMessages];
+  if (jsonMode) {
+    systemInstructionParts.push("CRITICAL: Return ONLY valid JSON. No markdown, no code fences, no extra text.");
+  }
+
+  const payload = {
+    contents,
+    generationConfig: {
+      temperature,
+      maxOutputTokens: maxTokens,
+    },
+  };
+
+  if (systemInstructionParts.length > 0) {
+    payload.systemInstruction = {
+      parts: [{ text: systemInstructionParts.join("\n\n") }],
+    };
+  }
+
+  if (jsonMode) {
+    payload.generationConfig.responseMimeType = "application/json";
+  }
+
+  return payload;
+};
+
+const isGeminiModel = (model) => {
+  if (!model) return false;
+  return model.startsWith("gemini") || model.startsWith("models/gemini");
+};
+
 const tryModel = async (model, messages, temperature, maxTokens, jsonMode) => {
-  const response = await callOpenRouter(buildPayload(model, messages, temperature, maxTokens, jsonMode));
+  const response = isGeminiModel(model)
+    ? await callGemini(model, buildGeminiPayload(messages, temperature, maxTokens, jsonMode))
+    : await callOpenRouter(buildOpenRouterPayload(model, messages, temperature, maxTokens, jsonMode));
+
   const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || "";
+
+  const content = isGeminiModel(model)
+    ? data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || ""
+    : data.choices?.[0]?.message?.content || "";
+
   if (!content) throw new Error("Empty response from model " + model);
   if (jsonMode) {
     const parsed = safeJsonParse(content);
