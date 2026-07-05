@@ -2,6 +2,7 @@ import { safeJsonParse } from "./helpers.js";
 
 const PRIMARY_MODEL = process.env.OPENROUTER_MODEL || "openrouter/free";
 const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL || "openai/gpt-oss-20b";
+const DEFAULT_MODEL = PRIMARY_MODEL;
 
 export const callOpenRouter = async (payload, maxRetries = 3) => {
   if (!process.env.OPENROUTER_API_KEY) {
@@ -32,50 +33,57 @@ export const callOpenRouter = async (payload, maxRetries = 3) => {
   throw new Error("OpenRouter request failed after retries.");
 };
 
+const buildPayload = (model, messages, temperature, maxTokens, jsonMode) => {
+  let adjustedMessages = messages;
+  // For free model, don't send response_format (often unsupported); reinforce JSON in prompt instead
+  const useResponseFormat = jsonMode && model !== "openrouter/free";
+  if (jsonMode) {
+    adjustedMessages = messages.map((m) =>
+      m.role === "system"
+        ? { ...m, content: m.content + "\n\nCRITICAL: Return ONLY valid JSON. No markdown, no code fences, no extra text." }
+        : m
+    );
+    if (!adjustedMessages.some((m) => m.role === "system")) {
+      adjustedMessages = [{ role: "system", content: "CRITICAL: Return ONLY valid JSON. No markdown, no code fences, no extra text." }, ...adjustedMessages];
+    }
+  }
+  const payload = { model, messages: adjustedMessages, stream: false, temperature, max_tokens: maxTokens };
+  if (useResponseFormat) payload.response_format = { type: "json_object" };
+  return payload;
+};
+
+const tryModel = async (model, messages, temperature, maxTokens, jsonMode) => {
+  const response = await callOpenRouter(buildPayload(model, messages, temperature, maxTokens, jsonMode));
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content || "";
+  if (!content) throw new Error("Empty response from model " + model);
+  if (jsonMode) {
+    const parsed = safeJsonParse(content);
+    if (!parsed) throw new Error("Failed to parse JSON from model " + model);
+    return parsed;
+  }
+  return content;
+};
+
 export const callLLM = async ({ messages, model, temperature = 0.3, maxTokens = 1000, jsonMode = false }) => {
-  const buildPayload = (m) => {
-    const p = { model: m, messages, stream: false, temperature, max_tokens: maxTokens };
-    if (jsonMode) p.response_format = { type: "json_object" };
-    return p;
-  };
-
-  const extractContent = (response) => {
-    const data = response.json ? null : null;
-    return data;
-  };
-
-  const parseResponse = (response) => {
-    return response.json();
-  };
-
   const primaryModel = model || PRIMARY_MODEL;
 
   // Try primary (free) model first
   try {
-    const response = await callOpenRouter(buildPayload(primaryModel));
-    const data = await parseResponse(response);
-    const content = data.choices?.[0]?.message?.content || "";
-    if (!content) throw new Error("Empty response from primary model");
-    if (jsonMode) return safeJsonParse(content) || { error: "Failed to parse LLM JSON response", raw: content };
-    return content;
+    return await tryModel(primaryModel, messages, temperature, maxTokens, jsonMode);
   } catch (primaryError) {
-    // If primary failed and we haven't tried a different model, fall back
+    // If already using fallback model, don't retry
     if (primaryModel === FALLBACK_MODEL) throw primaryError;
 
     console.warn("[LLM] Primary model \"" + primaryModel + "\" failed: " + primaryError.message + ". Falling back to \"" + FALLBACK_MODEL + "\".");
 
+    // Fall back to reliable model
     try {
-      const response = await callOpenRouter(buildPayload(FALLBACK_MODEL));
-      const data = await parseResponse(response);
-      const content = data.choices?.[0]?.message?.content || "";
-      if (jsonMode) return safeJsonParse(content) || { error: "Failed to parse LLM JSON response", raw: content };
-      return content;
+      return await tryModel(FALLBACK_MODEL, messages, temperature, maxTokens, jsonMode);
     } catch (fallbackError) {
       throw new Error("Both primary (" + primaryModel + ") and fallback (" + FALLBACK_MODEL + ") models failed. Primary: " + primaryError.message + " | Fallback: " + fallbackError.message);
     }
   }
 };
-
-const DEFAULT_MODEL = PRIMARY_MODEL;
 
 export { PRIMARY_MODEL, FALLBACK_MODEL, DEFAULT_MODEL };

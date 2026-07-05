@@ -74,15 +74,21 @@ export const escapeHtml = (value = "") =>
     .replace(/'/g, "&#39;");
 
 export const safeJsonParse = (text) => {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (match) {
-      try { return JSON.parse(match[1]); } catch { /* ignore */ }
-    }
-    return null;
+  if (!text || typeof text !== "string") return null;
+  // Try direct parse
+  try { return JSON.parse(text); } catch { /* continue */ }
+  // Try extracting from markdown code fence
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) {
+    try { return JSON.parse(fenceMatch[1]); } catch { /* continue */ }
   }
+  // Try extracting JSON object from surrounding text
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    try { return JSON.parse(text.slice(start, end + 1)); } catch { /* continue */ }
+  }
+  return null;
 };
 
 export const formatDate = (date) =>
