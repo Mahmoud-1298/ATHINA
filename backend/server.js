@@ -123,9 +123,9 @@ app.get("/api/history/:sessionId", async (req, res) => {
 // Main orchestrator endpoint — autonomous agent flow
 app.post("/api/agent", async (req, res) => {
   try {
-    const { message = "", sessionId = "default", mode = "text" } = req.body;
+    const { message = "", sessionId = "default", mode = "text", locationContext = null } = req.body;
     if (!message.trim()) return res.status(400).json({ error: "Missing message" });
-    const result = await orchestrate({ message, sessionId, mode });
+    const result = await orchestrate({ message, sessionId, mode, locationContext });
     res.json(result);
   } catch (error) {
     console.error("/api/agent error:", error.message);
@@ -238,7 +238,7 @@ app.post("/api/chat", chatCompletionsHandler);
 // Voice endpoint
 app.post("/api/voice", async (req, res) => {
   try {
-    const { audioBase64, sessionId = "default" } = req.body;
+    const { audioBase64, sessionId = "default", locationContext = null } = req.body;
     if (!audioBase64) return res.status(400).json({ error: "Missing audioBase64" });
     const transcript = await transcribeSpeech(audioBase64);
 
@@ -263,7 +263,7 @@ app.post("/api/voice", async (req, res) => {
       return;
     }
 
-    const result = await orchestrate({ message: transcript, sessionId, mode: "voice" });
+    const result = await orchestrate({ message: transcript, sessionId, mode: "voice", locationContext });
     const audioBase64Response = await synthesizeSpeech(result.reply);
     res.json({ success: true, transcript, text: result.reply, audioBase64: audioBase64Response, sessionId, actions: result.actions || [] });
   } catch (error) {

@@ -1,12 +1,28 @@
-import { getHistory, saveTurn, savePlan, saveTaskResult } from "./memory/supabaseMemory.js";
+import { getContext, saveContext, getHistory, saveTurn, savePlan, saveTaskResult } from "./memory/supabaseMemory.js";
 import { plan } from "./planner.js";
 import { decomposeTasks } from "./taskDecomposer.js";
 import { execute as executeTasks } from "./executionEngine.js";
 import { validatePlan, validateTasks, checkSafety } from "./ruleEngine.js";
 import { getQuickReply, buildCompactExecutionReply } from "./llmManager.js";
-export const orchestrate = async ({ message, sessionId = "default", mode = "text" }) => {
+const buildLocationContext = async (sessionId, locationContext) => {
+  const fallbackContext = locationContext || (await getContext(sessionId, "map_context"));
+  if (!fallbackContext || typeof fallbackContext.lat !== "number" || typeof fallbackContext.lng !== "number") return "";
+
+  return [
+    "Active map context:",
+    "- name: " + (fallbackContext.name || "selected location"),
+    "- latitude: " + fallbackContext.lat,
+    "- longitude: " + fallbackContext.lng,
+    fallbackContext.query ? "- source: " + fallbackContext.query : "",
+  ].filter(Boolean).join("\n");
+};
+
+export const orchestrate = async ({ message, sessionId = "default", mode = "text", locationContext = null }) => {
   const safety = checkSafety(message);
   if (!safety.safe) return { success: false, reply: "I cannot process this request: " + safety.reason, actions: [], sessionId, timestamp: new Date().toISOString() };
+  if (locationContext && typeof locationContext.lat === "number" && typeof locationContext.lng === "number") {
+    await saveContext(sessionId, "map_context", locationContext);
+  }
   const quickReply = getQuickReply(message);
   if (quickReply) {
     await saveTurn(sessionId, message, quickReply.reply);
@@ -14,7 +30,8 @@ export const orchestrate = async ({ message, sessionId = "default", mode = "text
   }
 
   const history = await getHistory(sessionId, 6);
-  const planResult = await plan({ message, history });
+  const locationNote = await buildLocationContext(sessionId, locationContext);
+  const planResult = await plan({ message: locationNote ? locationNote + "\n\nUser request: " + message : message, history });
   if (!planResult.requiresPlanning) {
     const reply = planResult.reply || "I am here. How can I help?";
     await saveTurn(sessionId, message, reply);
@@ -26,7 +43,7 @@ export const orchestrate = async ({ message, sessionId = "default", mode = "text
     await saveTurn(sessionId, message, reply);
     return { success: false, reply, actions: [], sessionId, timestamp: new Date().toISOString() };
   }
-  const tasks = await decomposeTasks({ plan: planResult, history });
+  const tasks = await decomposeTasks({ plan: planResult, history, locationNote });
   const taskValidation = validateTasks(tasks);
   if (!taskValidation.valid) {
     const reply = "I cannot execute these tasks: " + taskValidation.violations.join("; ");

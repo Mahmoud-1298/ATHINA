@@ -11,6 +11,7 @@ import {
   AgentAction,
   AgentBrowseAction,
   BACKEND_BASE_URL,
+  MapLocationContext,
   loadConversationHistory,
   sendAgentMessage,
   speakText,
@@ -74,6 +75,7 @@ const Index = () => {
   const [isVoiceSessionOpen, setIsVoiceSessionOpen] = useState(false);
   const [mapTarget, setMapTarget] = useState<MapTarget | null>(null);
   const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
+  const [selectedMapLocation, setSelectedMapLocation] = useState<MapLocationContext | null>(null);
   const [showBrowserPreview, setShowBrowserPreview] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -183,11 +185,21 @@ const Index = () => {
     });
   }, []);
 
+  const handleSelectLocation = useCallback((target: MapTarget) => {
+    setSelectedMapLocation({
+      name: target.name,
+      lat: target.lat,
+      lng: target.lng,
+      source: "map",
+      query: target.query,
+    });
+  }, []);
+
   const runAgent = useCallback(
     async (text: string, mode: "text" | "voice" = "text") => {
       setIsProcessing(true);
       try {
-        const result = await sendAgentMessage(text, SESSION_ID, mode);
+        const result = await sendAgentMessage(text, SESSION_ID, mode, selectedMapLocation);
         addMessage("agent", result.reply);
         applyActions(result.actions || []);
         return result.reply;
@@ -204,7 +216,7 @@ const Index = () => {
         setIsProcessing(false);
       }
     },
-    [addMessage, applyActions]
+    [addMessage, applyActions, selectedMapLocation]
   );
 
   const speakReply = useCallback(async (text: string) => {
@@ -380,8 +392,8 @@ const Index = () => {
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background">
-      <div className="pointer-events-none fixed right-4 top-16 z-10 h-48 w-48 sm:h-56 sm:w-56 md:h-64 md:w-64">
-        <GlobeMap target={mapTarget} className="h-full w-full" />
+      <div className="fixed right-4 top-4 z-20 h-[min(26rem,calc(100vh-2rem))] w-[min(26rem,calc(100vw-2rem))] sm:h-[min(30rem,calc(100vh-2rem))] sm:w-[min(30rem,calc(100vw-2rem))] md:h-[min(34rem,calc(100vh-2rem))] md:w-[min(34rem,calc(100vw-2rem))]">
+        <GlobeMap target={mapTarget} onSelectLocation={handleSelectLocation} className="h-full w-full" />
       </div>
 
       <JarvisParticles isSpeaking={isSpeaking} isActive={isActive} />

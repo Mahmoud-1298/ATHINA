@@ -36,6 +36,14 @@ export interface AgentResponse {
   timestamp: string;
 }
 
+export interface MapLocationContext {
+  name: string;
+  lat: number;
+  lng: number;
+  source?: string;
+  query?: string;
+}
+
 export interface ConversationMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -75,13 +83,14 @@ const parseJsonSafe = async (response: Response) => {
 export const sendAgentMessage = async (
   message: string,
   sessionId = "ui-session",
-  mode: "text" | "voice" = "text"
+  mode: "text" | "voice" = "text",
+  locationContext?: MapLocationContext | null
 ): Promise<AgentResponse> => {
   const url = `${BACKEND_BASE_URL}/api/agent`;
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, sessionId, mode }),
+    body: JSON.stringify({ message, sessionId, mode, locationContext }),
   });
 
   const data = await parseJsonSafe(response);
