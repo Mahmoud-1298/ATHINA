@@ -36,3 +36,14 @@ CREATE TABLE IF NOT EXISTS athina_context (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(session_id, key)
 );
+
+-- Enable RLS and add permissive policies for anon (publishable key) and authenticated roles
+ALTER TABLE athina_memory ENABLE ROW LEVEL SECURITY;
+ALTER TABLE athina_plans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE athina_task_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE athina_context ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "athina_memory_all" ON athina_memory FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "athina_plans_all" ON athina_plans FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "athina_task_results_all" ON athina_task_results FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "athina_context_all" ON athina_context FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
