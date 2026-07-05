@@ -36,8 +36,8 @@ const ACTION_KEYWORDS = [
 ];
 
 export const plan = async ({ message, history }) => {
-  const messages = [{ role: "system", content: PLANNER_PROMPT }, ...history.slice(-8), { role: "user", content: message }];
-  const result = await callLLM({ messages, temperature: 0.2, maxTokens: 600, jsonMode: true });
+  const messages = [{ role: "system", content: PLANNER_PROMPT }, ...history.slice(-4), { role: "user", content: message }];
+  const result = await callLLM({ messages, temperature: 0.1, maxTokens: 220, jsonMode: true });
 
   let requiresPlanning = result.requiresPlanning || false;
   let reply = result.reply || "";

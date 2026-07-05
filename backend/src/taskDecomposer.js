@@ -16,7 +16,7 @@ const DECOMPOSER_PROMPT = [
 export const decomposeTasks = async ({ plan: planResult, history }) => {
   const toolList = getToolSchemas().map((t) => "- " + t.name + ": " + t.description).join("\n");
   const planText = "Goal: " + planResult.goal + "\nSteps:\n" + planResult.steps.map((s, i) => (i + 1) + ". " + s).join("\n");
-  const messages = [{ role: "system", content: DECOMPOSER_PROMPT + "\n\nAvailable tools:\n" + toolList }, ...history.slice(-4), { role: "user", content: planText }];
-  const result = await callLLM({ messages, temperature: 0.2, maxTokens: 1000, jsonMode: true });
+  const messages = [{ role: "system", content: DECOMPOSER_PROMPT + "\n\nAvailable tools:\n" + toolList }, ...history.slice(-2), { role: "user", content: planText }];
+  const result = await callLLM({ messages, temperature: 0.1, maxTokens: 320, jsonMode: true });
   return result.tasks || [];
 };

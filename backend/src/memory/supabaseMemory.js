@@ -16,7 +16,7 @@ const getSupabase = () => {
 // In-memory fallback when Supabase is not configured
 const memoryFallback = new Map();
 
-export const getHistory = async (sessionId) => {
+export const getHistory = async (sessionId, limit = 20) => {
   const sb = getSupabase();
   if (sb) {
     const { data } = await sb
@@ -24,10 +24,11 @@ export const getHistory = async (sessionId) => {
       .select("role, content")
       .eq("session_id", sessionId)
       .order("created_at", { ascending: true })
-      .limit(20);
+      .limit(limit);
     return (data || []).map((r) => ({ role: r.role, content: r.content }));
   }
-  return memoryFallback.get(sessionId) || [];
+  const history = memoryFallback.get(sessionId) || [];
+  return history.slice(-limit);
 };
 
 export const saveTurn = async (sessionId, userMessage, assistantMessage) => {

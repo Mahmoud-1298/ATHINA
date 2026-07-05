@@ -50,6 +50,56 @@ const synthesizeSpeech = async (text) => {
   return Buffer.from(await ttsResponse.arrayBuffer()).toString("base64");
 };
 
+const parseAudioInput = (audioBase64) => {
+  const input = String(audioBase64 || "").trim();
+  if (!input) return null;
+
+  const dataUrlMatch = input.match(/^data:([^;]+);base64,(.+)$/i);
+  if (dataUrlMatch) {
+    return {
+      mimeType: dataUrlMatch[1],
+      base64: dataUrlMatch[2],
+    };
+  }
+
+  return {
+    mimeType: "audio/webm",
+    base64: input,
+  };
+};
+
+const transcribeSpeech = async (audioBase64) => {
+  const parsed = parseAudioInput(audioBase64);
+  if (!parsed) return null;
+
+  const transcriptionApiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY;
+  if (!transcriptionApiKey) return null;
+
+  const transcriptionUrl = process.env.OPENAI_TRANSCRIPTION_URL || "https://api.openai.com/v1/audio/transcriptions";
+  const transcriptionModel = process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1";
+  const audioBuffer = Buffer.from(parsed.base64, "base64");
+  const audioFile = new Blob([audioBuffer], { type: parsed.mimeType });
+  const formData = new FormData();
+  formData.append("model", transcriptionModel);
+  formData.append("file", audioFile, `voice.${parsed.mimeType.includes("wav") ? "wav" : parsed.mimeType.includes("mp3") ? "mp3" : "webm"}`);
+
+  const response = await fetch(transcriptionUrl, {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + transcriptionApiKey,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error("Speech transcription failed " + response.status + ": " + errorText);
+  }
+
+  const data = await response.json();
+  return String(data.text || "").trim() || null;
+};
+
 // --- Routes ---
 app.get("/", (_req, res) => {
   res.json({ ok: true, service: "ATHINA backend", architecture: "orchestrator + planner + memory + rule engine + execution engine + tools", endpoints: ["/health", "/api/agent", "/api/chat", "/api/speak", "/api/voice", "/api/preview"] });
@@ -57,6 +107,17 @@ app.get("/", (_req, res) => {
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
+});
+
+app.get("/api/history/:sessionId", async (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || "default");
+    const history = await getHistory(sessionId);
+    res.json({ success: true, sessionId, messages: history });
+  } catch (error) {
+    console.error("/api/history error:", error.message);
+    res.status(500).json({ error: "Failed to load history", details: error.message });
+  }
 });
 
 // Main orchestrator endpoint — autonomous agent flow
@@ -117,7 +178,7 @@ const chatCompletionsHandler = async (req, res) => {
       mode = "athina";
       sessionId = (body && body.sessionId) || "default";
       userMessage = (body && body.message) || "";
-      const history = await getHistory(sessionId);
+      const history = await getHistory(sessionId, 6);
       messages = [
         { role: "system", content: "You are ATHINA, an autonomous executive AI agent. Be concise, professional, and intelligent." },
         ...history,
@@ -179,23 +240,32 @@ app.post("/api/voice", async (req, res) => {
   try {
     const { audioBase64, sessionId = "default" } = req.body;
     if (!audioBase64) return res.status(400).json({ error: "Missing audioBase64" });
-    const history = await getHistory(sessionId);
-    const response = await callOpenRouter({
-      model: DEFAULT_MODEL,
-      messages: [
-        { role: "system", content: "You are ATHINA, an autonomous executive AI agent. Reply in short spoken-friendly sentences." },
-        ...history,
-        { role: "user", content: "The user sent a voice message. Speech-to-text is not configured yet, so ask them to repeat the request in text or enable a transcription provider." },
-      ],
-      stream: false,
-      temperature: 0.3,
-      max_tokens: 300,
-    });
-    const data = await response.json();
-    const textResponse = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "I heard you, but transcription is not configured yet.";
-    await saveTurn(sessionId, "[Voice message received]", textResponse);
-    const audioBase64Response = await synthesizeSpeech(textResponse);
-    res.json({ success: true, text: textResponse, audioBase64: audioBase64Response, sessionId });
+    const transcript = await transcribeSpeech(audioBase64);
+
+    if (!transcript) {
+      const history = await getHistory(sessionId, 6);
+      const response = await callOpenRouter({
+        model: DEFAULT_MODEL,
+        messages: [
+          { role: "system", content: "You are ATHINA, an autonomous executive AI agent. Reply in short spoken-friendly sentences." },
+          ...history,
+          { role: "user", content: "The user sent a voice message, but speech-to-text is not configured. Ask them to repeat the request in text or enable a transcription provider." },
+        ],
+        stream: false,
+        temperature: 0.3,
+        max_tokens: 300,
+      });
+      const data = await response.json();
+      const textResponse = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "I heard you, but transcription is not configured yet.";
+      await saveTurn(sessionId, "[Voice message received]", textResponse);
+      const audioBase64Response = await synthesizeSpeech(textResponse);
+      res.json({ success: true, transcript: null, text: textResponse, audioBase64: audioBase64Response, sessionId });
+      return;
+    }
+
+    const result = await orchestrate({ message: transcript, sessionId, mode: "voice" });
+    const audioBase64Response = await synthesizeSpeech(result.reply);
+    res.json({ success: true, transcript, text: result.reply, audioBase64: audioBase64Response, sessionId, actions: result.actions || [] });
   } catch (error) {
     console.error("/api/voice error:", error.message);
     res.status(500).json({ error: "Voice processing failed", details: error.message });

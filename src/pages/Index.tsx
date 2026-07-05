@@ -11,6 +11,7 @@ import {
   AgentAction,
   AgentBrowseAction,
   BACKEND_BASE_URL,
+  loadConversationHistory,
   sendAgentMessage,
   speakText,
 } from "../lib/athinaApi.ts";
@@ -104,6 +105,34 @@ const Index = () => {
   useEffect(() => {
     isProcessingRef.current = isProcessing;
   }, [isProcessing]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadHistory = async () => {
+      try {
+        const history = await loadConversationHistory(SESSION_ID);
+        if (cancelled) return;
+        setMessages(
+          history.messages
+            .filter((message) => message.role === "user" || message.role === "assistant")
+            .map((message) => ({
+              id: `${message.role}-${Math.random().toString(16).slice(2)}`,
+              role: message.role === "assistant" ? "agent" : "user",
+              text: message.content,
+            }))
+        );
+      } catch (error) {
+        console.error("Failed to load conversation history:", error);
+      }
+    };
+
+    loadHistory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const addMessage = useCallback((role: Message["role"], text: string) => {
     setMessages((prev) => [

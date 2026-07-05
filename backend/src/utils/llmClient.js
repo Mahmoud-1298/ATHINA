@@ -3,6 +3,25 @@ import { safeJsonParse } from "./helpers.js";
 const PRIMARY_MODEL = process.env.OPENROUTER_MODEL || "openrouter/free";
 const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL || "openai/gpt-oss-20b";
 const DEFAULT_MODEL = PRIMARY_MODEL;
+const RESPONSE_CACHE = new Map();
+const CACHE_TTL_MS = Number(process.env.LLM_CACHE_TTL_MS) || 5 * 60 * 1000;
+
+const getCacheKey = ({ model, messages, temperature, maxTokens, jsonMode }) =>
+  JSON.stringify({ model, messages, temperature, maxTokens, jsonMode });
+
+const getCachedResponse = (key) => {
+  const entry = RESPONSE_CACHE.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt < Date.now()) {
+    RESPONSE_CACHE.delete(key);
+    return null;
+  }
+  return entry.value;
+};
+
+const setCachedResponse = (key, value) => {
+  RESPONSE_CACHE.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+};
 
 export const callOpenRouter = async (payload, maxRetries = 3) => {
   if (!process.env.OPENROUTER_API_KEY) {
@@ -67,10 +86,15 @@ const tryModel = async (model, messages, temperature, maxTokens, jsonMode) => {
 
 export const callLLM = async ({ messages, model, temperature = 0.3, maxTokens = 1000, jsonMode = false }) => {
   const primaryModel = model || PRIMARY_MODEL;
+  const cacheKey = getCacheKey({ model: primaryModel, messages, temperature, maxTokens, jsonMode });
+  const cached = getCachedResponse(cacheKey);
+  if (cached !== null) return cached;
 
   // Try primary (free) model first
   try {
-    return await tryModel(primaryModel, messages, temperature, maxTokens, jsonMode);
+    const result = await tryModel(primaryModel, messages, temperature, maxTokens, jsonMode);
+    setCachedResponse(cacheKey, result);
+    return result;
   } catch (primaryError) {
     // If already using fallback model, don't retry
     if (primaryModel === FALLBACK_MODEL) throw primaryError;
@@ -79,7 +103,12 @@ export const callLLM = async ({ messages, model, temperature = 0.3, maxTokens = 
 
     // Fall back to reliable model
     try {
-      return await tryModel(FALLBACK_MODEL, messages, temperature, maxTokens, jsonMode);
+      const fallbackCacheKey = getCacheKey({ model: FALLBACK_MODEL, messages, temperature, maxTokens, jsonMode });
+      const fallbackCached = getCachedResponse(fallbackCacheKey);
+      if (fallbackCached !== null) return fallbackCached;
+      const result = await tryModel(FALLBACK_MODEL, messages, temperature, maxTokens, jsonMode);
+      setCachedResponse(fallbackCacheKey, result);
+      return result;
     } catch (fallbackError) {
       throw new Error("Both primary (" + primaryModel + ") and fallback (" + FALLBACK_MODEL + ") models failed. Primary: " + primaryError.message + " | Fallback: " + fallbackError.message);
     }

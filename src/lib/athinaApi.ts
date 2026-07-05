@@ -36,6 +36,11 @@ export interface AgentResponse {
   timestamp: string;
 }
 
+export interface ConversationMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
 const BACKEND_ENV_URL = [
   import.meta.env.VITE_BACKEND_URL,
   import.meta.env.VITE_BACKEND_UR,
@@ -86,6 +91,17 @@ export const sendAgentMessage = async (
   }
 
   return data;
+};
+
+export const loadConversationHistory = async (sessionId = "ui-session") => {
+  const response = await fetch(`${BACKEND_BASE_URL}/api/history/${encodeURIComponent(sessionId)}`);
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data?.details || data?.error || "Failed to load conversation history");
+  }
+
+  return data as { success: boolean; sessionId: string; messages: ConversationMessage[] };
 };
 
 export const sendVoiceMessage = async (audioBase64: string, sessionId = "ui-session") => {
