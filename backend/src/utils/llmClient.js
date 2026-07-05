@@ -1,6 +1,7 @@
 import { safeJsonParse } from "./helpers.js";
 
-const DEFAULT_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-oss-20b";
+const PRIMARY_MODEL = process.env.OPENROUTER_MODEL || "openrouter/free";
+const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL || "openai/gpt-oss-20b";
 
 export const callOpenRouter = async (payload, maxRetries = 3) => {
   if (!process.env.OPENROUTER_API_KEY) {
@@ -32,23 +33,47 @@ export const callOpenRouter = async (payload, maxRetries = 3) => {
 };
 
 export const callLLM = async ({ messages, model, temperature = 0.3, maxTokens = 1000, jsonMode = false }) => {
-  const payload = {
-    model: model || DEFAULT_MODEL,
-    messages,
-    stream: false,
-    temperature,
-    max_tokens: maxTokens,
+  const buildPayload = (m) => {
+    const p = { model: m, messages, stream: false, temperature, max_tokens: maxTokens };
+    if (jsonMode) p.response_format = { type: "json_object" };
+    return p;
   };
-  if (jsonMode) {
-    payload.response_format = { type: "json_object" };
+
+  const extractContent = (response) => {
+    const data = response.json ? null : null;
+    return data;
+  };
+
+  const parseResponse = (response) => {
+    return response.json();
+  };
+
+  const primaryModel = model || PRIMARY_MODEL;
+
+  // Try primary (free) model first
+  try {
+    const response = await callOpenRouter(buildPayload(primaryModel));
+    const data = await parseResponse(response);
+    const content = data.choices?.[0]?.message?.content || "";
+    if (!content) throw new Error("Empty response from primary model");
+    if (jsonMode) return safeJsonParse(content) || { error: "Failed to parse LLM JSON response", raw: content };
+    return content;
+  } catch (primaryError) {
+    // If primary failed and we haven't tried a different model, fall back
+    if (primaryModel === FALLBACK_MODEL) throw primaryError;
+
+    console.warn("[LLM] Primary model \"" + primaryModel + "\" failed: " + primaryError.message + ". Falling back to \"" + FALLBACK_MODEL + "\".");
+
+    try {
+      const response = await callOpenRouter(buildPayload(FALLBACK_MODEL));
+      const data = await parseResponse(response);
+      const content = data.choices?.[0]?.message?.content || "";
+      if (jsonMode) return safeJsonParse(content) || { error: "Failed to parse LLM JSON response", raw: content };
+      return content;
+    } catch (fallbackError) {
+      throw new Error("Both primary (" + primaryModel + ") and fallback (" + FALLBACK_MODEL + ") models failed. Primary: " + primaryError.message + " | Fallback: " + fallbackError.message);
+    }
   }
-  const response = await callOpenRouter(payload);
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || "";
-  if (jsonMode) {
-    return safeJsonParse(content) || { error: "Failed to parse LLM JSON response", raw: content };
-  }
-  return content;
 };
 
-export { DEFAULT_MODEL };
+export { PRIMARY_MODEL, FALLBACK_MODEL };
