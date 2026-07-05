@@ -76,4 +76,6 @@ export const callLLM = async ({ messages, model, temperature = 0.3, maxTokens = 
   }
 };
 
-export { PRIMARY_MODEL, FALLBACK_MODEL };
+const DEFAULT_MODEL = PRIMARY_MODEL;
+
+export { PRIMARY_MODEL, FALLBACK_MODEL, DEFAULT_MODEL };
