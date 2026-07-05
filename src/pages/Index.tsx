@@ -4,7 +4,7 @@ import { ExternalLink, Send, X } from "lucide-react";
 import VoiceOrb from "../components/VoiceOrb.tsx";
 import StatusBar from "../components/StatusBar.tsx";
 import JarvisParticles from "../components/JarvisParticles.tsx";
-import WorldMap, { MapTarget } from "../components/WorldMap.tsx";
+import GlobeMap, { MapTarget } from "../components/GlobeMap.tsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -351,8 +351,8 @@ const Index = () => {
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background">
-      <div className="absolute inset-0 z-0">
-        <WorldMap target={mapTarget} isBackground className="h-full w-full" />
+      <div className="pointer-events-none fixed right-4 top-16 z-10 h-48 w-48 sm:h-56 sm:w-56 md:h-64 md:w-64">
+        <GlobeMap target={mapTarget} className="h-full w-full" />
       </div>
 
       <JarvisParticles isSpeaking={isSpeaking} isActive={isActive} />
