@@ -150,7 +150,7 @@
 }
 
 .athina-worldmap .leaflet-tile-pane {
-  filter: grayscale(1) contrast(2.1) brightness(0.24) saturate(0);
+  filter: brightness(0.86) contrast(1.08) saturate(1.18) hue-rotate(165deg);
 }
 
 .athina-worldmap .leaflet-overlay-pane,
@@ -170,17 +170,17 @@
 .athina-worldmap-grain {
   background-image: radial-gradient(rgba(148, 163, 184, 0.12) 0.55px, transparent 0.6px);
   background-size: 4px 4px;
-  opacity: 0.12;
+  opacity: 0.02;
   mix-blend-mode: soft-light;
 }
 
 .athina-worldmap-vignette {
-  background: radial-gradient(circle at center, rgba(0, 0, 0, 0.02) 18%, rgba(0, 0, 0, 0.82) 100%);
+  background: radial-gradient(circle at center, rgba(7, 13, 30, 0.02) 32%, rgba(0, 0, 0, 0.44) 100%);
 }
 
 .athina-worldmap-dotmask {
   background-image: radial-gradient(circle, rgba(71, 85, 105, 0.58) 0.75px, transparent 0.92px);
   background-size: 8px 8px;
-  opacity: 0.42;
+  opacity: 0.06;
   mix-blend-mode: multiply;
 }

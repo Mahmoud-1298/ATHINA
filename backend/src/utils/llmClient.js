@@ -1,6 +1,6 @@
 import { safeJsonParse } from "./helpers.js";
 
-const PRIMARY_MODEL = process.env.OPENROUTER_MODEL || "openrouter/free";
+const PRIMARY_MODEL = process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash-lite";
 const FALLBACK_MODEL = process.env.OPENROUTER_FALLBACK_MODEL || "openai/gpt-oss-20b";
 const DEFAULT_MODEL = PRIMARY_MODEL;
 const RESPONSE_CACHE = new Map();
@@ -54,7 +54,7 @@ export const callOpenRouter = async (payload, maxRetries = 3) => {
 
 const buildPayload = (model, messages, temperature, maxTokens, jsonMode) => {
   let adjustedMessages = messages;
-  // For free model, don't send response_format (often unsupported); reinforce JSON in prompt instead
+  // Some lightweight models may not support response_format; keep JSON constraints in-system either way
   const useResponseFormat = jsonMode && model !== "openrouter/free";
   if (jsonMode) {
     adjustedMessages = messages.map((m) =>
@@ -90,7 +90,7 @@ export const callLLM = async ({ messages, model, temperature = 0.3, maxTokens = 
   const cached = getCachedResponse(cacheKey);
   if (cached !== null) return cached;
 
-  // Try primary (free) model first
+  // Try primary model first
   try {
     const result = await tryModel(primaryModel, messages, temperature, maxTokens, jsonMode);
     setCachedResponse(cacheKey, result);

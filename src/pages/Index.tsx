@@ -4,7 +4,7 @@ import { ExternalLink, Send, X } from "lucide-react";
 import VoiceOrb from "../components/VoiceOrb.tsx";
 import StatusBar from "../components/StatusBar.tsx";
 import JarvisParticles from "../components/JarvisParticles.tsx";
-import GlobeMap, { MapTarget } from "../components/GlobeMap.tsx";
+import WorldMap, { MapTarget } from "../components/WorldMap.tsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -162,11 +162,19 @@ const Index = () => {
   const applyActions = useCallback((actions: AgentAction[]) => {
     actions.forEach((action) => {
       if (action.type === "locate" && action.success && action.lat && action.lng) {
-        setMapTarget({
+        const locatedTarget = {
           name: action.name || action.query,
           lat: action.lat,
           lng: action.lng,
           query: action.query,
+        };
+        setMapTarget(locatedTarget);
+        setSelectedMapLocation({
+          name: locatedTarget.name,
+          lat: locatedTarget.lat,
+          lng: locatedTarget.lng,
+          source: "agent-locate",
+          query: locatedTarget.query,
         });
       }
 
@@ -186,6 +194,7 @@ const Index = () => {
   }, []);
 
   const handleSelectLocation = useCallback((target: MapTarget) => {
+    setMapTarget(target);
     setSelectedMapLocation({
       name: target.name,
       lat: target.lat,
@@ -392,8 +401,8 @@ const Index = () => {
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background">
-      <div className="fixed right-4 top-4 z-20 h-[min(26rem,calc(100vh-2rem))] w-[min(26rem,calc(100vw-2rem))] sm:h-[min(30rem,calc(100vh-2rem))] sm:w-[min(30rem,calc(100vw-2rem))] md:h-[min(34rem,calc(100vh-2rem))] md:w-[min(34rem,calc(100vw-2rem))]">
-        <GlobeMap target={mapTarget} onSelectLocation={handleSelectLocation} className="h-full w-full" />
+      <div className="fixed right-4 top-4 z-20 h-[min(17.6rem,calc(100vh-2rem))] w-[min(27.2rem,calc(100vw-2rem))] sm:h-[min(19.2rem,calc(100vh-2rem))] sm:w-[min(28.8rem,calc(100vw-2rem))] md:h-[min(20.8rem,calc(100vh-2rem))] md:w-[min(32rem,calc(100vw-2rem))]">
+        <WorldMap target={mapTarget} onSelectLocation={handleSelectLocation} className="h-full w-full" />
       </div>
 
       <JarvisParticles isSpeaking={isSpeaking} isActive={isActive} />
