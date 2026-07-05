@@ -1,589 +1,100 @@
-import fs from "fs";
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
 import dotenv from "dotenv";
+import { orchestrate } from "./src/orchestrator.js";
+import { callOpenRouter, DEFAULT_MODEL } from "./src/utils/llmClient.js";
+import { getHistory, saveTurn } from "./src/memory/supabaseMemory.js";
+import { fetchWithTimeout, normalizeUrl, escapeHtml } from "./src/utils/helpers.js";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DEFAULT_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-oss-20b";
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "*";
 
-app.use(
-  cors({
-    origin: FRONTEND_ORIGIN === "*" ? true : FRONTEND_ORIGIN.split(","),
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+app.use(cors({
+  origin: FRONTEND_ORIGIN === "*" ? true : FRONTEND_ORIGIN.split(","),
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 app.use(express.json({ limit: "15mb" }));
 
-const conversations = new Map();
-
-const knowledgeBase = fs.existsSync("knowledge.txt")
-  ? fs.readFileSync("knowledge.txt", "utf8")
-  : "";
-
-const CORE_PROMPT = `
-You are ATHINA, an autonomous executive AI agent.
-The user is your primary operator. You may call the user "Sir" sparingly when natural.
-
-Operate like a practical JARVIS-style assistant:
-- Understand the user's goal.
-- Decide whether the UI should show a map location, browser page, or plain answer.
-- Be concise, loyal, professional, and intelligent.
-- Never pretend you performed an action that the system did not actually perform.
-- If a request is unsafe, impossible, or needs credentials, explain the limitation and propose the next step.
-
-${knowledgeBase}
-`;
-
-const TEXT_MODE_RULES = `
-Text mode: answer clearly and concisely. Prefer short paragraphs. Ask a clarifying question only when required.
-`;
-
-const VOICE_MODE_RULES = `
-Voice mode: reply in short spoken-friendly sentences suitable for text-to-speech.
-`;
-
-const AGENT_JSON_RULES = `
-Return only valid JSON with this shape:
-{
-  "reply": "short response for the user",
-  "actions": [
-    {
-      "type": "locate" | "browse",
-      "query": "place or search query",
-      "url": "optional absolute URL for browse"
-    }
-  ]
-}
-
-Use "locate" when the user asks where something is, asks to find a place on the map, or asks for directions/location.
-Use "browse" when the user asks you to browse, open a site, search the web, research current information, or inspect a page.
-When you choose "browse", include a clear query string so the system can gather reliable web results.
-Use both actions when useful. Keep actions focused; do not create more than 3.
-Do not reply with placeholders like "I've completed the request.".
-`;
-
-const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 9000);
-
-const fetchWithTimeout = async (url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-};
-
-const cleanText = (value = "") =>
-  value
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const decodeDuckDuckGoUrl = (rawUrl = "") => {
-  try {
-    if (rawUrl.startsWith("/l/?")) {
-      const parsed = new URL(`https://duckduckgo.com${rawUrl}`);
-      const uddg = parsed.searchParams.get("uddg");
-      return uddg ? decodeURIComponent(uddg) : rawUrl;
-    }
-    return rawUrl;
-  } catch {
-    return rawUrl;
-  }
-};
-
-const extractDuckDuckGoHtmlResults = (html, limit = 5) => {
-  const blockRegex = /<div class="result__body">([\s\S]*?)<\/div>\s*<\/div>/g;
-  const out = [];
-
-  let match;
-  while ((match = blockRegex.exec(html)) !== null && out.length < limit) {
-    const block = match[1];
-    const linkMatch = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
-    if (!linkMatch) continue;
-
-    const snippetMatch = block.match(/<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i);
-    const url = decodeDuckDuckGoUrl(linkMatch[1]);
-    if (!/^https?:\/\//i.test(url)) continue;
-
-    out.push({
-      title: cleanText(linkMatch[2]).slice(0, 180),
-      url,
-      snippet: cleanText(snippetMatch?.[1] || "").slice(0, 340),
-    });
-  }
-
-  return out;
-};
-
-const searchWebResults = async (query) => {
-  const htmlUrl = new URL("https://html.duckduckgo.com/html/");
-  htmlUrl.searchParams.set("q", query);
-
-  const htmlResponse = await fetchWithTimeout(htmlUrl.toString(), {
-    headers: {
-      "User-Agent": "ATHINA-Agent/1.0",
-      Accept: "text/html",
-    },
-  });
-
-  if (!htmlResponse.ok) {
-    throw new Error(`Web search failed with status ${htmlResponse.status}`);
-  }
-
-  const html = await htmlResponse.text();
-  const htmlResults = extractDuckDuckGoHtmlResults(html, 5);
-  if (htmlResults.length > 0) {
-    return htmlResults;
-  }
-
-  // Fallback to instant answer API when HTML result parsing yields nothing.
-  const apiUrl = new URL("https://api.duckduckgo.com/");
-  apiUrl.searchParams.set("q", query);
-  apiUrl.searchParams.set("format", "json");
-  apiUrl.searchParams.set("no_html", "1");
-  apiUrl.searchParams.set("skip_disambig", "1");
-
-  const apiResponse = await fetchWithTimeout(apiUrl.toString(), {
-    headers: { Accept: "application/json" },
-  });
-
-  if (!apiResponse.ok) {
-    throw new Error(`Web search fallback failed with status ${apiResponse.status}`);
-  }
-
-  const data = await apiResponse.json();
-  const topic = data.RelatedTopics?.find((item) => item.FirstURL);
-  const fallbackUrl =
-    data.AbstractURL || topic?.FirstURL || `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
-
-  return [
-    {
-      title: data.Heading || query,
-      url: fallbackUrl,
-      snippet: cleanText(data.AbstractText || topic?.Text || ""),
-    },
-  ];
-};
-
-const isLikelyIframeBlocked = (responseHeaders) => {
-  const xFrame = responseHeaders.get("x-frame-options") || "";
-  const csp = responseHeaders.get("content-security-policy") || "";
-
-  return /deny|sameorigin/i.test(xFrame) || /frame-ancestors\s+'none'|frame-ancestors\s+'self'/i.test(csp);
-};
-
-const fetchReadablePageText = async (url) => {
-  const pageResponse = await fetchWithTimeout(url, {
-    headers: {
-      "User-Agent": "ATHINA-Agent/1.0",
-      Accept: "text/html,application/xhtml+xml,text/plain",
-    },
-  });
-
-  const contentType = pageResponse.headers.get("content-type") || "";
-  if (!pageResponse.ok || !contentType.includes("text")) {
-    return { text: "", embedBlocked: isLikelyIframeBlocked(pageResponse.headers) };
-  }
-
-  const html = await pageResponse.text();
-  const text = cleanText(html).slice(0, 2600);
-  return {
-    text,
-    embedBlocked: isLikelyIframeBlocked(pageResponse.headers),
-  };
-};
-
-const buildBrowseSummary = (query, sources, pageText) => {
-  const topSources = sources.slice(0, 4);
-  const sourceLines = topSources
-    .map((item, idx) => {
-      const snippet = item.snippet ? ` - ${item.snippet}` : "";
-      return `${idx + 1}. ${item.title || item.url}${snippet}`;
-    })
-    .join("\n");
-
-  const extracted = pageText ? `\n\nExtracted context:\n${pageText.slice(0, 900)}` : "";
-  return `Web briefing for "${query}":\n${sourceLines}${extracted}`.trim();
-};
-
-const isGenericReply = (reply = "") => {
-  const normalized = reply.toLowerCase().trim();
-  return (
-    !normalized ||
-    normalized === "i've completed the request." ||
-    normalized === "i have completed the request." ||
-    normalized === "completed." ||
-    normalized === "done."
-  );
-};
-
-const inferFallbackActions = (message, actions = []) => {
-  if (Array.isArray(actions) && actions.length > 0) return actions;
-
-  const text = String(message || "").toLowerCase();
-  const inferred = [];
-
-  if (/\b(where|locate|location|map|pin|point me|directions?)\b/.test(text)) {
-    inferred.push({ type: "locate", query: message });
-  }
-
-  if (/\b(open|browse|search|look up|latest|news|youtube|google|website|site|web)\b/.test(text)) {
-    inferred.push({ type: "browse", query: message });
-  }
-
-  return inferred.slice(0, 3);
-};
-
-const formatSmartBrowseReply = (browsed) => {
-  if (!browsed) return "";
-  const subject = browsed.title || browsed.query || "the requested page";
-  return `Done. I opened ${subject} in ATHINA's browser panel and prepared a concise summary.`;
-};
-
-const getHistory = (sessionId) => conversations.get(sessionId) || [];
-
-const saveTurn = (sessionId, userMessage, assistantMessage) => {
-  const history = getHistory(sessionId);
-  conversations.set(sessionId, [
-    ...history.slice(-16),
-    { role: "user", content: userMessage },
-    { role: "assistant", content: assistantMessage },
-  ]);
-};
-
-const callOpenRouter = async (payload, maxRetries = 3) => {
-  if (!process.env.OPENROUTER_API_KEY) {
-    throw new Error("Missing OPENROUTER_API_KEY environment variable.");
-  }
-
-  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": process.env.PUBLIC_APP_URL || "https://athina.ai",
-        "X-Title": "ATHINA",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (response.status === 429 && attempt < maxRetries) {
-      const retryAfter = Number(response.headers.get("retry-after")) || 2 ** attempt;
-      await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
-      continue;
-    }
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`OpenRouter error ${response.status}: ${errorText}`);
-    }
-
-    return response;
-  }
-
-  throw new Error("OpenRouter request failed after retries.");
-};
-
-const safeJsonParse = (text) => {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    return match ? JSON.parse(match[0]) : null;
-  }
-};
-
-const geocodeLocation = async (query) => {
-  const url = new URL("https://nominatim.openstreetmap.org/search");
-  url.searchParams.set("format", "jsonv2");
-  url.searchParams.set("limit", "1");
-  url.searchParams.set("q", query);
-
-  const response = await fetch(url.toString(), {
-    headers: {
-      "User-Agent": "ATHINA-Agent/1.0",
-      Accept: "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Location lookup failed with status ${response.status}`);
-  }
-
-  const results = await response.json();
-  const first = results?.[0];
-
-  if (!first) {
-    return { type: "locate", query, success: false, error: "Location not found." };
-  }
-
-  return {
-    type: "locate",
-    query,
-    success: true,
-    name: first.display_name,
-    lat: Number(first.lat),
-    lng: Number(first.lon),
-    mapUrl: `https://www.openstreetmap.org/?mlat=${first.lat}&mlon=${first.lon}#map=14/${first.lat}/${first.lon}`,
-  };
-};
-
-const normalizeUrl = (urlOrQuery) => {
-  if (/^https?:\/\//i.test(urlOrQuery)) return urlOrQuery;
-  if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(urlOrQuery)) {
-    return `https://${urlOrQuery}`;
-  }
-  return null;
-};
-
-const escapeHtml = (value = "") =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-
+// --- Preview helper ---
 const toPreviewHtml = (targetUrl, rawHtml) => {
   const safeTitle = escapeHtml(targetUrl);
   const body = rawHtml
     .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<meta[^>]+http-equiv=["']content-security-policy["'][^>]*>/gi, "")
-    .replace(/<meta[^>]+http-equiv=["']x-frame-options["'][^>]*>/gi, "");
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ATHINA Preview</title>
-  <base href="${escapeHtml(targetUrl)}" />
-  <style>
-    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b1120;color:#e2e8f0;}
-    .athina-preview-top{position:sticky;top:0;z-index:10;padding:10px 12px;background:#020617;border-bottom:1px solid #1f2937;font-size:12px;color:#93c5fd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  </style>
-</head>
-<body>
-  <div class="athina-preview-top">ATHINA in-app preview: ${safeTitle}</div>
-  ${body}
-</body>
-</html>`;
+    .replace(/<meta[^>]+http-equiv=["''"]content-security-policy["''"][^>]*>/gi, "")
+    .replace(/<meta[^>]+http-equiv=["''"]x-frame-options["''"][^>]*>/gi, "");
+  return "<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" /><title>ATHINA Preview</title><base href=\"" + escapeHtml(targetUrl) + "\" /><style>body{margin:0;font-family:system-ui,sans-serif;background:#0b1120;color:#e2e8f0;}.athina-preview-top{position:sticky;top:0;z-index:10;padding:10px 12px;background:#020617;border-bottom:1px solid #1f2937;font-size:12px;color:#93c5fd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}</style></head><body><div class=\"athina-preview-top\">ATHINA preview: " + safeTitle + "</div>" + body + "</body></html>";
 };
 
-const browseWeb = async ({ query, url }) => {
-  const searchQuery = query || url || "web research";
-  const target = normalizeUrl(url || "");
-
-  const sources = target
-    ? [{ title: target, url: target, snippet: "Direct URL requested by user." }]
-    : await searchWebResults(searchQuery);
-
-  const primary = sources[0] || {
-    title: searchQuery,
-    url: `https://duckduckgo.com/?q=${encodeURIComponent(searchQuery)}`,
-    snippet: "",
-  };
-
-  let pageText = "";
-  let embedBlocked = false;
-  try {
-    const pageResult = await fetchReadablePageText(primary.url);
-    pageText = pageResult.text;
-    embedBlocked = pageResult.embedBlocked;
-  } catch {
-    // Some websites block bot reads. Source snippets still provide in-app results.
-  }
-
-  const summary = buildBrowseSummary(searchQuery, sources, pageText);
-
-  return {
-    type: "browse",
-    query: searchQuery,
-    success: true,
-    url: primary.url,
-    title: primary.title,
-    summary,
-    sources,
-    embedBlocked,
-    fetchedAt: new Date().toISOString(),
-  };
-};
-
-const executeActions = async (actions = []) => {
-  const limitedActions = actions.filter(Boolean).slice(0, 3);
-
-  return Promise.all(
-    limitedActions.map(async (action) => {
-      try {
-        if (action.type === "locate") return await geocodeLocation(action.query);
-        if (action.type === "browse") return await browseWeb(action);
-        return { type: action.type || "unknown", success: false, error: "Unsupported action." };
-      } catch (error) {
-        return {
-          type: action.type || "unknown",
-          query: action.query,
-          success: false,
-          error: error.message,
-        };
-      }
-    })
-  );
-};
-
-app.get("/", (_req, res) => {
-  res.json({ ok: true, service: "ATHINA backend", endpoints: ["/health", "/api/agent", "/api/chat", "/api/speak", "/api/voice", "/api/preview"] });
-});
-
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, timestamp: new Date().toISOString() });
-});
-
-app.get("/api/preview", async (req, res) => {
-  try {
-    const target = normalizeUrl(String(req.query.url || ""));
-    if (!target) {
-      return res.status(400).send("Invalid preview URL");
-    }
-
-    const response = await fetchWithTimeout(target, {
-      headers: {
-        "User-Agent": "ATHINA-Agent/1.0",
-        Accept: "text/html,application/xhtml+xml,text/plain",
-      },
-    });
-
-    if (!response.ok) {
-      return res.status(response.status).send(`Failed to fetch ${target}`);
-    }
-
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.includes("text/html")) {
-      const text = await response.text();
-      return res
-        .type("text/html")
-        .send(`<pre style="white-space:pre-wrap;background:#020617;color:#e2e8f0;padding:12px;">${escapeHtml(text.slice(0, 120000))}</pre>`);
-    }
-
-    const html = await response.text();
-    res.type("text/html").send(toPreviewHtml(target, html));
-  } catch (error) {
-    res.status(500).send(`Preview failed: ${escapeHtml(error.message || "unknown error")}`);
-  }
-});
-
-app.post("/api/agent", async (req, res) => {
-  try {
-    const { message = "", sessionId = "default", mode = "text" } = req.body;
-    if (!message.trim()) return res.status(400).json({ error: "Missing message" });
-
-    const messages = [
-      { role: "system", content: CORE_PROMPT + "\n" + (mode === "voice" ? VOICE_MODE_RULES : TEXT_MODE_RULES) + "\n" + AGENT_JSON_RULES },
-      ...getHistory(sessionId),
-      { role: "user", content: message },
-    ];
-
-    const response = await callOpenRouter({
-      model: DEFAULT_MODEL,
-      messages,
-      stream: false,
-      temperature: 0.2,
-      max_tokens: 700,
-      response_format: { type: "json_object" },
-    });
-
-    const data = await response.json();
-    const rawText = data.choices?.[0]?.message?.content || "{}";
-    const plan = safeJsonParse(rawText) || { reply: rawText, actions: [] };
-    const plannedActions = inferFallbackActions(message, plan.actions);
-    const actionResults = await executeActions(plannedActions);
-
-    let reply = plan.reply || "I've completed the request.";
-    const located = actionResults.find((item) => item.type === "locate" && item.success);
-    const browsed = actionResults.find((item) => item.type === "browse" && item.success);
-
-    if (isGenericReply(reply) && browsed) {
-      reply = formatSmartBrowseReply(browsed);
-    }
-
-    if (isGenericReply(reply) && located) {
-      reply = `Done. I pinned ${located.name || located.query || "the location"} on your map.`;
-    }
-
-    if (isGenericReply(reply) && !located && !browsed) {
-      reply = "I could not execute that action yet. Give me a clearer command like 'open youtube', 'search latest AI agent news', or 'locate Cairo on map'.";
-    }
-
-    if (located) reply += `\n\nI located ${located.name}.`;
-    if (browsed?.embedBlocked) {
-      reply += "\n\nThe target site blocks direct embed, so I kept the result in ATHINA's internal browser and briefing panel.";
-    }
-
-    saveTurn(sessionId, message, reply);
-
-    res.json({
-      success: true,
-      reply,
-      actions: actionResults,
-      sessionId,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("/api/agent error:", error.message);
-    res.status(500).json({ error: "Agent processing failed", details: error.message });
-  }
-});
-
+// --- TTS ---
 const synthesizeSpeech = async (text) => {
   const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
   const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || "lxYfHSkYm1EzQzGhdbfc";
-
   if (!elevenLabsKey) return null;
-
-  const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoiceId}`, {
+  const ttsResponse = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + elevenLabsVoiceId, {
     method: "POST",
-    headers: {
-      "xi-api-key": elevenLabsKey,
-      "Content-Type": "application/json",
-    },
+    headers: { "xi-api-key": elevenLabsKey, "Content-Type": "application/json" },
     body: JSON.stringify({
       text,
       model_id: process.env.ELEVENLABS_MODEL_ID || "eleven_monolingual_v1",
       voice_settings: { stability: 0.5, similarity_boost: 0.75 },
     }),
   });
-
   if (!ttsResponse.ok) {
     const error = await ttsResponse.text();
-    throw new Error(`ElevenLabs error ${ttsResponse.status}: ${error}`);
+    throw new Error("ElevenLabs error " + ttsResponse.status + ": " + error);
   }
-
   return Buffer.from(await ttsResponse.arrayBuffer()).toString("base64");
 };
 
+// --- Routes ---
+app.get("/", (_req, res) => {
+  res.json({ ok: true, service: "ATHINA backend", architecture: "orchestrator + planner + memory + rule engine + execution engine + tools", endpoints: ["/health", "/api/agent", "/api/chat", "/api/speak", "/api/voice", "/api/preview"] });
+});
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, timestamp: new Date().toISOString() });
+});
+
+// Main orchestrator endpoint — autonomous agent flow
+app.post("/api/agent", async (req, res) => {
+  try {
+    const { message = "", sessionId = "default", mode = "text" } = req.body;
+    if (!message.trim()) return res.status(400).json({ error: "Missing message" });
+    const result = await orchestrate({ message, sessionId, mode });
+    res.json(result);
+  } catch (error) {
+    console.error("/api/agent error:", error.message);
+    res.status(500).json({ error: "Agent processing failed", details: error.message });
+  }
+});
+
+// Web page preview proxy
+app.get("/api/preview", async (req, res) => {
+  try {
+    const target = normalizeUrl(String(req.query.url || ""));
+    if (!target) return res.status(400).send("Invalid preview URL");
+    const response = await fetchWithTimeout(target, {
+      headers: { "User-Agent": "ATHINA-Agent/1.0", Accept: "text/html,application/xhtml+xml,text/plain" },
+    });
+    if (!response.ok) return res.status(response.status).send("Failed to fetch " + target);
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("text")) return res.status(400).send("<pre>Non-HTML content type: " + escapeHtml(contentType) + "</pre>");
+    const html = await response.text();
+    res.type("text/html").send(toPreviewHtml(target, html));
+  } catch (error) {
+    res.status(500).send("Preview failed: " + escapeHtml(error.message || "unknown error"));
+  }
+});
+
+// TTS endpoint
 app.post("/api/speak", async (req, res) => {
   try {
     const { text = "" } = req.body;
     if (!text.trim()) return res.status(400).json({ error: "Missing text" });
-
     const audioBase64 = await synthesizeSpeech(text);
     res.json({ success: true, audioBase64 });
   } catch (error) {
@@ -592,90 +103,65 @@ app.post("/api/speak", async (req, res) => {
   }
 });
 
-const normalizeChatRequest = (body) => {
-  if (Array.isArray(body?.messages)) {
-    return {
-      mode: "openai",
-      messages: body.messages,
-      model: body.model || DEFAULT_MODEL,
-      stream: body.stream ?? true,
-      extra: body,
-    };
-  }
-
-  const { message = "", sessionId = "default" } = body;
-
-  return {
-    mode: "athina",
-    messages: [
-      { role: "system", content: CORE_PROMPT + "\n" + TEXT_MODE_RULES },
-      ...getHistory(sessionId),
-      { role: "user", content: message },
-    ],
-    model: DEFAULT_MODEL,
-    stream: body.stream ?? true,
-    sessionId,
-    userMessage: message,
-  };
-};
-
+// Chat completions (OpenAI-compatible)
 const chatCompletionsHandler = async (req, res) => {
   try {
-    const normalized = normalizeChatRequest(req.body);
-    const response = await callOpenRouter({
-      ...normalized.extra,
-      model: normalized.model,
-      messages: normalized.messages,
-      stream: !!normalized.stream,
-      temperature: normalized.extra?.temperature ?? 0.3,
-      max_tokens: normalized.extra?.max_tokens ?? 500,
-    });
-
-    if (normalized.stream) {
+    const body = req.body;
+    let messages, model, stream, sessionId = "default", userMessage = "", mode;
+    if (Array.isArray(body && body.messages)) {
+      mode = "openai";
+      messages = body.messages;
+      model = body.model || DEFAULT_MODEL;
+      stream = body.stream !== undefined ? body.stream : true;
+    } else {
+      mode = "athina";
+      sessionId = (body && body.sessionId) || "default";
+      userMessage = (body && body.message) || "";
+      const history = await getHistory(sessionId);
+      messages = [
+        { role: "system", content: "You are ATHINA, an autonomous executive AI agent. Be concise, professional, and intelligent." },
+        ...history,
+        { role: "user", content: userMessage },
+      ];
+      model = DEFAULT_MODEL;
+      stream = body && body.stream !== undefined ? body.stream : true;
+    }
+    const response = await callOpenRouter({ ...body, model, messages, stream: !!stream });
+    if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
-
       let fullText = "";
-
       response.body.on("data", (chunk) => {
         const chunkStr = chunk.toString();
         res.write(chunkStr);
-
         for (const line of chunkStr.split("\n")) {
           if (!line.startsWith("data:")) continue;
           const jsonStr = line.replace("data:", "").trim();
           if (!jsonStr || jsonStr === "[DONE]") continue;
           try {
             const parsed = JSON.parse(jsonStr);
-            fullText += parsed.choices?.[0]?.delta?.content || parsed.token || "";
-          } catch {
-            // Ignore partial SSE JSON fragments.
-          }
+            fullText += (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content) || parsed.token || "";
+          } catch {}
         }
       });
-
       response.body.on("end", () => {
-        if (normalized.mode === "athina") {
-          saveTurn(normalized.sessionId, normalized.userMessage, fullText);
-        }
+        if (mode === "athina") saveTurn(sessionId, userMessage, fullText).catch(console.error);
         res.write("data: [DONE]\n\n");
         res.end();
       });
-
       response.body.on("error", (error) => {
         console.error("Stream error:", error.message);
-        res.write(`data: ${JSON.stringify({ error: "Stream error from OpenRouter" })}\n\n`);
+        res.write("data: " + JSON.stringify({ error: "Stream error from OpenRouter" }) + "\n\n");
         res.write("data: [DONE]\n\n");
         res.end();
       });
-
       return;
     }
-
     const data = await response.json();
-    if (normalized.mode === "athina") {
-      saveTurn(normalized.sessionId, normalized.userMessage, data.choices?.[0]?.message?.content || "");
+    if (mode === "athina") {
+      const content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
+      await saveTurn(sessionId, userMessage, content);
     }
     res.json(data);
   } catch (error) {
@@ -688,31 +174,26 @@ app.post("/v1/chat/completions", chatCompletionsHandler);
 app.post("/chat/completions", chatCompletionsHandler);
 app.post("/api/chat", chatCompletionsHandler);
 
+// Voice endpoint
 app.post("/api/voice", async (req, res) => {
   try {
     const { audioBase64, sessionId = "default" } = req.body;
     if (!audioBase64) return res.status(400).json({ error: "Missing audioBase64" });
-
+    const history = await getHistory(sessionId);
     const response = await callOpenRouter({
       model: DEFAULT_MODEL,
       messages: [
-        { role: "system", content: CORE_PROMPT + "\n" + VOICE_MODE_RULES },
-        ...getHistory(sessionId),
-        {
-          role: "user",
-          content:
-            "The user sent a voice message. Speech-to-text is not configured yet, so ask them to repeat the request in text or enable a transcription provider.",
-        },
+        { role: "system", content: "You are ATHINA, an autonomous executive AI agent. Reply in short spoken-friendly sentences." },
+        ...history,
+        { role: "user", content: "The user sent a voice message. Speech-to-text is not configured yet, so ask them to repeat the request in text or enable a transcription provider." },
       ],
       stream: false,
       temperature: 0.3,
       max_tokens: 300,
     });
-
     const data = await response.json();
-    const textResponse = data.choices?.[0]?.message?.content || "I heard you, but transcription is not configured yet.";
-    saveTurn(sessionId, "[Voice message received]", textResponse);
-
+    const textResponse = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "I heard you, but transcription is not configured yet.";
+    await saveTurn(sessionId, "[Voice message received]", textResponse);
     const audioBase64Response = await synthesizeSpeech(textResponse);
     res.json({ success: true, text: textResponse, audioBase64: audioBase64Response, sessionId });
   } catch (error) {
@@ -722,5 +203,5 @@ app.post("/api/voice", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`ATHINA backend running on port ${PORT}`);
+  console.log("ATHINA backend running on port " + PORT);
 });
