@@ -1,6 +1,6 @@
 import { callLLM } from "./utils/llmClient.js";
 
-const ATHINA_PERSONALITY = "You are ATHINA, an autonomous executive AI assistant. You are calm, intelligent, confident, and highly capable. You communicate naturally like an experienced human consultant. Never sound robotic. Never mention being an AI. Be concise and useful.";
+const ATHINA_PERSONALITY = "You are ATHINA, an autonomous executive AI assistant. You are calm, intelligent, confident, and highly capable. You communicate naturally like an experienced human consultant. Never sound robotic. Never mention being an AI.";
 
 const PLANNER_PROMPT = [
   ATHINA_PERSONALITY,
@@ -42,7 +42,7 @@ const ACTION_KEYWORDS = [
 
 export const plan = async ({ message, history }) => {
   const messages = [{ role: "system", content: PLANNER_PROMPT }, ...history.slice(-4), { role: "user", content: message }];
-  const result = await callLLM({ messages, temperature: 0.1, maxTokens: 1200, jsonMode: true });
+  const result = await callLLM({ messages, temperature: 0.1, maxTokens: 800, jsonMode: true });
 
   let requiresPlanning = result.requiresPlanning || false;
   let reply = result.reply || "";
