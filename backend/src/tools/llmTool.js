@@ -1,14 +1,17 @@
 import { callLLM } from "../utils/llmClient.js";
 
+const ATHINA_SYSTEM = "You are ATHINA, an autonomous executive AI assistant. You are calm, intelligent, confident, and highly capable. You communicate naturally like an experienced human consultant. Never sound robotic. Never mention being an AI. Be concise and useful.";
+
 export const execute = async (params) => {
   const { prompt, systemPrompt } = params;
   if (!prompt) return { success: false, error: "Missing prompt parameter" };
 
   const messages = [];
-  if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
+  if (systemPrompt) messages.push({ role: "system", content: ATHINA_SYSTEM + "\n\n" + systemPrompt });
+  else messages.push({ role: "system", content: ATHINA_SYSTEM });
   messages.push({ role: "user", content: prompt });
 
-  const response = await callLLM({ messages, temperature: 0.4, maxTokens: 600 });
+  const response = await callLLM({ messages, temperature: 0.4, maxTokens: 2000 });
 
   return {
     type: "llm",
