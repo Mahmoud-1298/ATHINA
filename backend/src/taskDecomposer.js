@@ -1,5 +1,6 @@
 import { callLLM } from "./utils/llmClient.js";
 import { getToolSchemas } from "./tools/index.js";
+
 const DECOMPOSER_PROMPT = [
   "You are ATHINA Task Decomposer. Convert each plan step into an executable task.",
   "Available tools:",
@@ -13,11 +14,12 @@ const DECOMPOSER_PROMPT = [
   "Rules: Use ${task_X.field} in params to reference results from previous tasks. Each task uses one tool. Order by dependency. For email use user@example.com if unknown. For calendar use ISO datetime. Max 10 tasks. Use llm tool if no tool fits.",
   "Return only valid JSON.",
 ].join("\n");
+
 export const decomposeTasks = async ({ plan: planResult, history, locationNote = "" }) => {
   const toolList = getToolSchemas().map((t) => "- " + t.name + ": " + t.description).join("\n");
   const planText = "Goal: " + planResult.goal + "\nSteps:\n" + planResult.steps.map((s, i) => (i + 1) + ". " + s).join("\n");
   const userContent = [locationNote, planText].filter(Boolean).join("\n\n");
   const messages = [{ role: "system", content: DECOMPOSER_PROMPT + "\n\nAvailable tools:\n" + toolList }, ...history.slice(-2), { role: "user", content: userContent }];
-  const result = await callLLM({ messages, temperature: 0.1, maxTokens: 320, jsonMode: true });
+  const result = await callLLM({ messages, temperature: 0.1, maxTokens: 1500, jsonMode: true });
   return result.tasks || [];
 };
