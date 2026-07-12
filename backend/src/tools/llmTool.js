@@ -11,7 +11,7 @@ export const execute = async (params) => {
   else messages.push({ role: "system", content: ATHINA_SYSTEM });
   messages.push({ role: "user", content: prompt });
 
-  const response = await callLLM({ messages, temperature: 0.4, maxTokens: 2000 });
+  const response = await callLLM({ messages, temperature: 0.4, maxTokens: 800 });
 
   return {
     type: "llm",
