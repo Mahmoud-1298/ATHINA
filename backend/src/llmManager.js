@@ -107,7 +107,7 @@ export const buildCompactExecutionReply = async (executed) => {
   ];
 
   try {
-    const reply = await callLLM({ messages, temperature: 0.4, maxTokens: 500 });
+    const reply = await callLLM({ messages, temperature: 0.4, maxTokens: 400 });
     return reply;
   } catch (error) {
     console.warn("[ATHINA] LLM reply generation failed, using fallback:", error.message);
