@@ -30,7 +30,7 @@ export const orchestrate = async ({ message, sessionId = "default", mode = "text
     return { success: true, reply: quickReply.reply, actions: [], sessionId, timestamp: new Date().toISOString(), quickReply: true };
   }
 
-  const history = await getHistory(sessionId, 6);
+  const history = await getHistory(sessionId, 4);
   const locationNote = await buildLocationContext(sessionId, locationContext);
   const planResult = await plan({ message: locationNote ? locationNote + "\n\nUser request: " + message : message, history });
   if (!planResult.requiresPlanning) {
