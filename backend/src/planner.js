@@ -26,7 +26,6 @@ const PLANNER_PROMPT = [
   "Return ONLY valid JSON.",
 ].join("\n");
 
-// Keyword patterns that always require planning (safety net if LLM misclassifies)
 const ACTION_KEYWORDS = [
   /\b(locat|map|where is|where.*\b|address|directions|near me|near\b|find me|show me|point to|pinpoint)\b/i,
   /\b(search|google|look up|lookup|browse|website|open.*(tab|site|page)|visit|url|youtube|www\.)\b/i,
@@ -37,14 +36,13 @@ const ACTION_KEYWORDS = [
 
 export const plan = async ({ message, history }) => {
   const messages = [{ role: "system", content: PLANNER_PROMPT }, ...history.slice(-4), { role: "user", content: message }];
-  const result = await callLLM({ messages, temperature: 0.1, maxTokens: 220, jsonMode: true });
+  const result = await callLLM({ messages, temperature: 0.1, maxTokens: 1200, jsonMode: true });
 
   let requiresPlanning = result.requiresPlanning || false;
   let reply = result.reply || "";
   let goal = result.goal || "";
   let steps = result.steps || [];
 
-  // Keyword safety net: if message matches action keywords but LLM said no planning, override
   if (!requiresPlanning) {
     const needsAction = ACTION_KEYWORDS.some((pattern) => pattern.test(message));
     if (needsAction) {
