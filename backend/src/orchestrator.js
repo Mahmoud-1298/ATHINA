@@ -4,6 +4,7 @@ import { decomposeTasks } from "./taskDecomposer.js";
 import { execute as executeTasks } from "./executionEngine.js";
 import { validatePlan, validateTasks, checkSafety } from "./ruleEngine.js";
 import { getQuickReply, buildCompactExecutionReply } from "./llmManager.js";
+
 const buildLocationContext = async (sessionId, locationContext) => {
   const fallbackContext = locationContext || (await getContext(sessionId, "map_context"));
   if (!fallbackContext || typeof fallbackContext.lat !== "number" || typeof fallbackContext.lng !== "number") return "";
@@ -52,11 +53,12 @@ export const orchestrate = async ({ message, sessionId = "default", mode = "text
   }
   await savePlan(sessionId, { goal: planResult.goal, steps: planResult.steps, tasks });
   const { executed } = await executeTasks(tasks, { saveTaskResult, sessionId });
-  const finalReply = buildCompactExecutionReply(executed);
+  const finalReply = await buildCompactExecutionReply(executed);
   await saveTurn(sessionId, message, finalReply);
   const actions = mapToActions(executed);
   return { success: true, reply: finalReply, actions, sessionId, timestamp: new Date().toISOString(), plan: { goal: planResult.goal, steps: planResult.steps }, tasks: executed.map((t) => ({ id: t.id, tool: t.tool, description: t.description, success: t.result && t.result.success })) };
 };
+
 const mapToActions = (executed) => {
   const actions = [];
   for (const task of executed) {
