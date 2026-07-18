@@ -1,7 +1,7 @@
 import { safeJsonParse } from "./helpers.js";
 
-const PRIMARY_MODEL = "nvidia/nemotron-3-embed-1b:free";
-const FALLBACK_MODEL = "nvidia/parakeet-tdt-0.6b-v3";
+const PRIMARY_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free";
+const FALLBACK_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 const DEFAULT_MODEL = PRIMARY_MODEL;
 const RESPONSE_CACHE = new Map();
 const CACHE_TTL_MS = Number(process.env.LLM_CACHE_TTL_MS) || 5 * 60 * 1000;
@@ -54,7 +54,8 @@ export const callOpenRouter = async (payload, maxRetries = 3) => {
 
 const buildOpenRouterPayload = (model, messages, temperature, maxTokens, jsonMode) => {
   let adjustedMessages = messages;
-  const useResponseFormat = jsonMode && model !== "openrouter/free";
+  // Skip response_format for free models - many don't support it
+  const useResponseFormat = jsonMode && !model.includes(":free") && model !== "openrouter/free";
   if (jsonMode) {
     adjustedMessages = messages.map((m) =>
       m.role === "system"
