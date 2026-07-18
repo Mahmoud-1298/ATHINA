@@ -1,6 +1,5 @@
 import { getContext, saveContext, getHistory, saveTurn, savePlan, saveTaskResult } from "./memory/supabaseMemory.js";
 import { plan } from "./planner.js";
-import { decomposeTasks } from "./taskDecomposer.js";
 import { execute as executeTasks } from "./executionEngine.js";
 import { validatePlan, validateTasks, checkSafety } from "./ruleEngine.js";
 import { getQuickReply, buildCompactExecutionReply } from "./llmManager.js";
@@ -32,19 +31,13 @@ export const orchestrate = async ({ message, sessionId = "default", mode = "text
 
   const history = await getHistory(sessionId, 4);
   const locationNote = await buildLocationContext(sessionId, locationContext);
-  const planResult = await plan({ message: locationNote ? locationNote + "\n\nUser request: " + message : message, history });
+  const planResult = await plan({ message, history, locationNote });
   if (!planResult.requiresPlanning) {
     const reply = planResult.reply || "I am here. How can I help?";
     await saveTurn(sessionId, message, reply);
     return { success: true, reply, actions: [], sessionId, timestamp: new Date().toISOString() };
   }
-  const planValidation = validatePlan(planResult);
-  if (!planValidation.valid) {
-    const reply = "I cannot execute this plan: " + planValidation.violations.join("; ");
-    await saveTurn(sessionId, message, reply);
-    return { success: false, reply, actions: [], sessionId, timestamp: new Date().toISOString() };
-  }
-  const tasks = await decomposeTasks({ plan: planResult, history, locationNote });
+  const tasks = planResult.tasks || [];
   const taskValidation = validateTasks(tasks);
   if (!taskValidation.valid) {
     const reply = "I cannot execute these tasks: " + taskValidation.violations.join("; ");
