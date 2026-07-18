@@ -33,20 +33,27 @@ const toPreviewHtml = (targetUrl, rawHtml) => {
 const synthesizeSpeech = async (text) => {
   const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
   const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || "lxYfHSkYm1EzQzGhdbfc";
-  if (!elevenLabsKey) return null;
+  const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || "eleven_v3";
+  if (!elevenLabsKey) {
+    console.error("[TTS] ELEVENLABS_API_KEY is not set");
+    return null;
+  }
+  console.log("[TTS] Synthesizing:", text.slice(0, 80), "| model:", elevenLabsModelId, "| voice:", elevenLabsVoiceId);
   const ttsResponse = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + elevenLabsVoiceId, {
     method: "POST",
     headers: { "xi-api-key": elevenLabsKey, "Content-Type": "application/json" },
     body: JSON.stringify({
       text,
-      model_id: process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5",
-      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+      model_id: elevenLabsModelId,
+      voice_settings: { stability: 0.5, similarity_boost: 0.75, use_speaker_boost: true },
     }),
   });
   if (!ttsResponse.ok) {
     const error = await ttsResponse.text();
+    console.error("[TTS] ElevenLabs error", ttsResponse.status, error);
     throw new Error("ElevenLabs error " + ttsResponse.status + ": " + error);
   }
+  console.log("[TTS] Success, audio generated");
   return Buffer.from(await ttsResponse.arrayBuffer()).toString("base64");
 };
 
