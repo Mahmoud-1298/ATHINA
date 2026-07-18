@@ -39,7 +39,7 @@ const synthesizeSpeech = async (text) => {
     headers: { "xi-api-key": elevenLabsKey, "Content-Type": "application/json" },
     body: JSON.stringify({
       text,
-      model_id: process.env.ELEVENLABS_MODEL_ID || "eleven_monolingual_v1",
+      model_id: process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5",
       voice_settings: { stability: 0.5, similarity_boost: 0.75 },
     }),
   });
@@ -120,7 +120,7 @@ app.get("/api/history/:sessionId", async (req, res) => {
   }
 });
 
-// Main orchestrator endpoint — autonomous agent flow
+// Main orchestrator endpoint â autonomous agent flow
 app.post("/api/agent", async (req, res) => {
   try {
     const { message = "", sessionId = "default", mode = "text", locationContext = null } = req.body;
