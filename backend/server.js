@@ -120,7 +120,7 @@ app.get("/api/history/:sessionId", async (req, res) => {
   }
 });
 
-// Main orchestrator endpoint â autonomous agent flow
+// Main orchestrator endpoint Ã¢ÂÂ autonomous agent flow
 app.post("/api/agent", async (req, res) => {
   try {
     const { message = "", sessionId = "default", mode = "text", locationContext = null } = req.body;
@@ -193,30 +193,31 @@ const chatCompletionsHandler = async (req, res) => {
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
       let fullText = "";
-      response.body.on("data", (chunk) => {
-        const chunkStr = chunk.toString();
-        res.write(chunkStr);
-        for (const line of chunkStr.split("\n")) {
-          if (!line.startsWith("data:")) continue;
-          const jsonStr = line.replace("data:", "").trim();
-          if (!jsonStr || jsonStr === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(jsonStr);
-            fullText += (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content) || parsed.token || "";
-          } catch {}
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunkStr = decoder.decode(value, { stream: true });
+          res.write(chunkStr);
+          for (const line of chunkStr.split("\n")) {
+            if (!line.startsWith("data:")) continue;
+            const jsonStr = line.replace("data:", "").trim();
+            if (!jsonStr || jsonStr === "[DONE]") continue;
+            try {
+              const parsed = JSON.parse(jsonStr);
+              fullText += (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content) || parsed.token || "";
+            } catch {}
+          }
         }
-      });
-      response.body.on("end", () => {
-        if (mode === "athina") saveTurn(sessionId, userMessage, fullText).catch(console.error);
-        res.write("data: [DONE]\n\n");
-        res.end();
-      });
-      response.body.on("error", (error) => {
-        console.error("Stream error:", error.message);
+      } catch (streamError) {
+        console.error("Stream error:", streamError.message);
         res.write("data: " + JSON.stringify({ error: "Stream error from OpenRouter" }) + "\n\n");
-        res.write("data: [DONE]\n\n");
-        res.end();
-      });
+      }
+      if (mode === "athina") saveTurn(sessionId, userMessage, fullText).catch(console.error);
+      res.write("data: [DONE]\n\n");
+      res.end();
       return;
     }
     const data = await response.json();
