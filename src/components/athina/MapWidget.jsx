@@ -64,23 +64,18 @@ export default function MapWidget({ coords, onCoordinatesReady }) {
 
   return (
     <div className="fixed top-4 right-4 z-40 w-[300px] sm:w-[360px]">
-      {/* Header */}
       <div className="flex items-center justify-between bg-zinc-900/90 backdrop-blur-md border border-zinc-700/60 rounded-t-xl px-3 py-2 shadow-2xl">
         <div className="flex items-center gap-2">
           <Globe className="w-4 h-4 text-zinc-400" />
           <span className="text-xs font-semibold text-zinc-200 tracking-wide">ATHINA GLOBE</span>
         </div>
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="text-zinc-400 hover:text-zinc-200 transition-colors"
-        >
+        <button onClick={() => setExpanded(!expanded)} className="text-zinc-400 hover:text-zinc-200 transition-colors">
           {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </button>
       </div>
 
       {expanded && (
         <>
-          {/* Search */}
           <div className="bg-zinc-900/90 backdrop-blur-md border-x border-zinc-700/60 px-3 py-2.5">
             <form onSubmit={handleSearch} className="relative">
               <input
@@ -89,11 +84,7 @@ export default function MapWidget({ coords, onCoordinatesReady }) {
                 placeholder="Search location..."
                 className="w-full bg-zinc-800/80 text-zinc-200 placeholder:text-zinc-500 px-3 py-1.5 pr-9 rounded-lg border border-zinc-700/60 focus:border-zinc-500 focus:outline-none text-sm transition-colors"
               />
-              <button
-                type="submit"
-                disabled={loading}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
-              >
+              <button type="submit" disabled={loading} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 disabled:opacity-50">
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
               </button>
             </form>
@@ -104,23 +95,17 @@ export default function MapWidget({ coords, onCoordinatesReady }) {
                 <span className="text-xs text-zinc-400 font-mono truncate">
                   {selected.lat.toFixed(4)}, {selected.lng.toFixed(4)}
                 </span>
-                <button
-                  onClick={copyCoords}
-                  className="ml-auto text-zinc-500 hover:text-zinc-300 transition-colors shrink-0"
-                  title="Copy coordinates"
-                >
+                <button onClick={copyCoords} className="ml-auto text-zinc-500 hover:text-zinc-300 transition-colors shrink-0" title="Copy coordinates">
                   {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
                 </button>
               </div>
             )}
           </div>
 
-          {/* Globe */}
           <div className="bg-zinc-900/90 backdrop-blur-md border border-t-0 border-zinc-700/60 rounded-b-xl overflow-hidden shadow-2xl h-[300px] sm:h-[360px]">
             <Globe3D markers={markers} flyTo={flyTo} onLocationSelect={handleGlobeClick} />
           </div>
 
-          {/* Hint */}
           <p className="text-[10px] text-zinc-600 text-center mt-1.5 select-none">
             Drag to rotate · Scroll to zoom · Click to pin
           </p>
