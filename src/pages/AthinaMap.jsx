@@ -58,13 +58,21 @@ export default function AthinaMap() {
             placeholder="Search any location..."
             className="w-56 sm:w-80 bg-secondary text-foreground placeholder:text-muted-foreground px-4 py-2 pr-10 rounded-lg border border-border focus:border-ring focus:outline-none text-sm"
           />
-          <button type="submit" disabled={loading} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground disabled:opacity-50">
+          <button
+            type="submit"
+            disabled={loading}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground disabled:opacity-50"
+          >
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
           </button>
           {showResults && results.length > 1 && (
             <div className="absolute top-full mt-2 right-0 w-72 bg-card border border-border rounded-lg shadow-xl max-h-64 overflow-y-auto">
               {results.map((r, i) => (
-                <button key={i} onClick={() => selectLocation(r)} className="w-full text-left px-3 py-2 border-b border-border last:border-0 hover:bg-secondary">
+                <button
+                  key={i}
+                  onClick={() => selectLocation(r)}
+                  className="w-full text-left px-3 py-2 border-b border-border last:border-0 hover:bg-secondary"
+                >
                   <p className="text-sm line-clamp-2">{r.name}</p>
                 </button>
               ))}

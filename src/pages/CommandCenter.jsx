@@ -41,8 +41,10 @@ export default function CommandCenter() {
 
   return (
     <div className="fixed inset-0 bg-[#06080d] text-white overflow-hidden">
+      {/* Full screen 2D dark map */}
       <DarkMap markers={mapMarkers} flyTo={mapFlyTo} />
 
+      {/* Header overlay */}
       <div className="absolute top-0 left-0 right-0 z-[1200] h-12 flex items-center justify-between px-4 sm:px-6 border-b border-slate-700/20 bg-[#0a0e14]/80 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div className="relative">
@@ -65,10 +67,12 @@ export default function CommandCenter() {
         </div>
       </div>
 
+      {/* ATHINA Avatar - top left */}
       <div className="absolute top-14 left-2 z-[800] pointer-events-none">
-        <AthinaAvatar state={avatarState} size={280} />
+        <AthinaAvatar state={avatarState} size={364} />
       </div>
 
+      {/* Active location info - top center below header */}
       {activeLocation && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 z-[1000] px-3 py-2 rounded-lg bg-[#0a0e14]/85 backdrop-blur-md border border-slate-700/30 max-w-[280px]">
           <p className="text-[9px] text-slate-500 font-mono uppercase tracking-wider">Active Location</p>
@@ -84,6 +88,7 @@ export default function CommandCenter() {
         </div>
       )}
 
+      {/* Floating chat - bottom right, half size */}
       <div className="absolute bottom-4 right-4 z-[1200] w-[360px] h-[55vh] max-h-[520px] rounded-xl overflow-hidden border border-slate-700/30 shadow-2xl shadow-black/50">
         <AgentConsole onActions={handleActions} onAvatarState={setAvatarState} />
       </div>
