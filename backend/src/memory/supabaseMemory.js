@@ -83,3 +83,22 @@ export const getContext = async (sessionId, key) => {
     .single();
   return data ? JSON.parse(data.value) : null;
 };
+
+export const saveAuditLog = async (event) => {
+  const sb = getSupabase();
+  if (!sb) return;
+
+  const payload = {
+    request_id: event.requestId || null,
+    session_id: event.sessionId || null,
+    actor_id: event.actorId || null,
+    endpoint: event.endpoint || null,
+    event_type: event.eventType || "event",
+    status: event.status || null,
+    latency_ms: Number.isFinite(event.latencyMs) ? event.latencyMs : null,
+    metadata: event.metadata || {},
+    created_at: event.createdAt || new Date().toISOString(),
+  };
+
+  await sb.from("athina_audit_logs").insert([payload]);
+};

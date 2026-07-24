@@ -1,9 +1,10 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import crypto from "crypto";
 import { orchestrate } from "./src/orchestrator.js";
 import { callOpenRouter, DEFAULT_MODEL } from "./src/utils/llmClient.js";
-import { getHistory, saveTurn } from "./src/memory/supabaseMemory.js";
+import { getHistory, saveTurn, saveAuditLog } from "./src/memory/supabaseMemory.js";
 import { fetchWithTimeout, normalizeUrl, escapeHtml } from "./src/utils/helpers.js";
 
 dotenv.config();
@@ -15,9 +16,115 @@ const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "*";
 app.use(cors({
   origin: FRONTEND_ORIGIN === "*" ? true : FRONTEND_ORIGIN.split(","),
   methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
 }));
 app.use(express.json({ limit: "15mb" }));
+
+const AUDIT_LOGS_ENABLED = process.env.AUDIT_LOGS_ENABLED !== "false";
+const AUDIT_SUPABASE_ENABLED = process.env.AUDIT_SUPABASE_ENABLED !== "false";
+
+const clip = (value, max = 180) => {
+  const text = String(value || "");
+  if (text.length <= max) return text;
+  return text.slice(0, max) + "...";
+};
+
+const redactText = (input) => {
+  const text = String(input || "");
+  return text
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted-token]")
+    .replace(/\b(sk|or|sb)_[A-Za-z0-9_-]{8,}\b/g, "[redacted-secret]");
+};
+
+const hashText = (input) => crypto.createHash("sha256").update(String(input || "")).digest("hex").slice(0, 16);
+
+const summarizeBody = (body) => {
+  if (!body || typeof body !== "object") return null;
+
+  const summary = { keys: Object.keys(body).slice(0, 20) };
+
+  if (body.sessionId) summary.sessionId = String(body.sessionId);
+  if (body.message) {
+    summary.messageHash = hashText(body.message);
+    summary.messagePreview = clip(redactText(body.message), 120);
+    summary.messageLength = String(body.message).length;
+  }
+  if (body.text) {
+    summary.textHash = hashText(body.text);
+    summary.textPreview = clip(redactText(body.text), 120);
+  }
+  if (body.audioBase64) summary.audioBase64Length = String(body.audioBase64).length;
+  if (Array.isArray(body.files)) summary.filesCount = body.files.length;
+  if (body.query) summary.query = clip(redactText(body.query), 120);
+
+  return summary;
+};
+
+const logStructured = (entry) => {
+  if (!AUDIT_LOGS_ENABLED) return;
+  console.log(JSON.stringify({ ts: new Date().toISOString(), ...entry }));
+};
+
+const persistAudit = async (event) => {
+  if (!AUDIT_SUPABASE_ENABLED) return;
+  try {
+    await saveAuditLog(event);
+  } catch (error) {
+    console.error("audit.persist error:", error.message);
+  }
+};
+
+const emitAudit = async (event) => {
+  logStructured({
+    type: "audit",
+    requestId: event.requestId || null,
+    sessionId: event.sessionId || null,
+    actorId: event.actorId || null,
+    endpoint: event.endpoint || null,
+    eventType: event.eventType || "event",
+    status: event.status || null,
+    latencyMs: event.latencyMs || null,
+    metadata: event.metadata || {},
+  });
+  await persistAudit(event);
+};
+
+app.use((req, res, next) => {
+  const requestId = req.get("x-request-id") || crypto.randomUUID();
+  const startAt = Date.now();
+  req.audit = { requestId, startAt };
+
+  void emitAudit({
+    requestId,
+    endpoint: req.originalUrl,
+    eventType: "request.start",
+    status: "started",
+    metadata: {
+      method: req.method,
+      ip: req.ip,
+      userAgent: clip(req.get("user-agent") || "", 160),
+      body: summarizeBody(req.body),
+    },
+  });
+
+  res.on("finish", () => {
+    const latencyMs = Date.now() - startAt;
+    void emitAudit({
+      requestId,
+      endpoint: req.originalUrl,
+      eventType: "request.finish",
+      status: res.statusCode < 400 ? "success" : "error",
+      latencyMs,
+      metadata: {
+        method: req.method,
+        statusCode: res.statusCode,
+      },
+    });
+  });
+
+  next();
+});
 
 // --- Preview helper ---
 const toPreviewHtml = (targetUrl, rawHtml) => {
@@ -270,11 +377,25 @@ app.get("/api/history/:sessionId", async (req, res) => {
 app.post("/api/functions/:functionName", async (req, res) => {
   try {
     const functionName = String(req.params.functionName || "");
+    const requestId = req.audit?.requestId || null;
 
     if (functionName === "athinaAgent") {
       const { message = "", sessionId = "default", locationContext = null } = req.body || {};
       if (!String(message).trim()) return res.status(400).json({ error: "Missing message" });
       const result = await orchestrate({ message, sessionId, mode: "text", locationContext });
+      await emitAudit({
+        requestId,
+        sessionId,
+        endpoint: req.originalUrl,
+        eventType: "agent.result",
+        status: result.success ? "success" : "error",
+        metadata: {
+          mode: "text",
+          via: "functions.athinaAgent",
+          tasksCount: Array.isArray(result.tasks) ? result.tasks.length : 0,
+          actionsCount: Array.isArray(result.actions) ? result.actions.length : 0,
+        },
+      });
       return res.json(result);
     }
 
@@ -356,11 +477,28 @@ app.post("/api/functions/:functionName", async (req, res) => {
         return res.status(400).json({ error: "Missing files array" });
       }
       const result = await syncFilesToGitHub(files);
+      await emitAudit({
+        requestId,
+        endpoint: req.originalUrl,
+        eventType: "github.sync",
+        status: result.success ? "success" : "error",
+        metadata: {
+          filesCount: files.length,
+          summary: result.summary,
+        },
+      });
       return res.json(result);
     }
 
     return res.status(404).json({ error: `Unknown function: ${functionName}` });
   } catch (error) {
+    await emitAudit({
+      requestId: req.audit?.requestId || null,
+      endpoint: req.originalUrl,
+      eventType: "function.error",
+      status: "error",
+      metadata: { error: clip(redactText(error.message || "unknown"), 300) },
+    });
     return res.status(500).json({ error: error.message || "Function call failed" });
   }
 });
@@ -371,9 +509,28 @@ app.post("/api/agent", async (req, res) => {
     const { message = "", sessionId = "default", mode = "text", locationContext = null } = req.body;
     if (!message.trim()) return res.status(400).json({ error: "Missing message" });
     const result = await orchestrate({ message, sessionId, mode, locationContext });
+    await emitAudit({
+      requestId: req.audit?.requestId || null,
+      sessionId,
+      endpoint: req.originalUrl,
+      eventType: "agent.result",
+      status: result.success ? "success" : "error",
+      metadata: {
+        mode,
+        tasksCount: Array.isArray(result.tasks) ? result.tasks.length : 0,
+        actionsCount: Array.isArray(result.actions) ? result.actions.length : 0,
+      },
+    });
     res.json(result);
   } catch (error) {
     console.error("/api/agent error:", error.message);
+    await emitAudit({
+      requestId: req.audit?.requestId || null,
+      endpoint: req.originalUrl,
+      eventType: "agent.error",
+      status: "error",
+      metadata: { error: clip(redactText(error.message || "unknown"), 300) },
+    });
     res.status(500).json({ error: "Agent processing failed", details: error.message });
   }
 });
@@ -413,6 +570,7 @@ app.post("/api/speak", async (req, res) => {
 const chatCompletionsHandler = async (req, res) => {
   try {
     const body = req.body;
+    const requestId = req.audit?.requestId || null;
     let messages, model, stream, sessionId = "default", userMessage = "", mode;
     if (Array.isArray(body && body.messages)) {
       mode = "openai";
@@ -461,6 +619,19 @@ const chatCompletionsHandler = async (req, res) => {
         res.write("data: " + JSON.stringify({ error: "Stream error from OpenRouter" }) + "\n\n");
       }
       if (mode === "athina") saveTurn(sessionId, userMessage, fullText).catch(console.error);
+      await emitAudit({
+        requestId,
+        sessionId: mode === "athina" ? sessionId : null,
+        endpoint: req.originalUrl,
+        eventType: "chat.stream.complete",
+        status: "success",
+        metadata: {
+          mode,
+          model,
+          stream: true,
+          outputLength: fullText.length,
+        },
+      });
       res.write("data: [DONE]\n\n");
       res.end();
       return;
@@ -470,9 +641,28 @@ const chatCompletionsHandler = async (req, res) => {
       const content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
       await saveTurn(sessionId, userMessage, content);
     }
+    await emitAudit({
+      requestId,
+      sessionId: mode === "athina" ? sessionId : null,
+      endpoint: req.originalUrl,
+      eventType: "chat.complete",
+      status: "success",
+      metadata: {
+        mode,
+        model,
+        stream: false,
+      },
+    });
     res.json(data);
   } catch (error) {
     console.error("/api/chat error:", error.message);
+    await emitAudit({
+      requestId: req.audit?.requestId || null,
+      endpoint: req.originalUrl,
+      eventType: "chat.error",
+      status: "error",
+      metadata: { error: clip(redactText(error.message || "unknown"), 300) },
+    });
     res.status(500).json({ error: "Chat processing failed", details: error.message });
   }
 };
@@ -505,19 +695,51 @@ app.post("/api/voice", async (req, res) => {
       const textResponse = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "I heard you, but transcription is not configured yet.";
       await saveTurn(sessionId, "[Voice message received]", textResponse);
       const audioBase64Response = await synthesizeSpeech(textResponse);
+      await emitAudit({
+        requestId: req.audit?.requestId || null,
+        sessionId,
+        endpoint: req.originalUrl,
+        eventType: "voice.fallback",
+        status: "success",
+        metadata: {
+          transcriptAvailable: false,
+          responseLength: textResponse.length,
+        },
+      });
       res.json({ success: true, transcript: null, text: textResponse, audioBase64: audioBase64Response, sessionId });
       return;
     }
 
     const result = await orchestrate({ message: transcript, sessionId, mode: "voice", locationContext });
     const audioBase64Response = await synthesizeSpeech(result.reply);
+    await emitAudit({
+      requestId: req.audit?.requestId || null,
+      sessionId,
+      endpoint: req.originalUrl,
+      eventType: "voice.result",
+      status: result.success ? "success" : "error",
+      metadata: {
+        transcriptAvailable: true,
+        transcriptHash: hashText(transcript),
+        transcriptPreview: clip(redactText(transcript), 120),
+        actionsCount: Array.isArray(result.actions) ? result.actions.length : 0,
+      },
+    });
     res.json({ success: true, transcript, text: result.reply, audioBase64: audioBase64Response, sessionId, actions: result.actions || [] });
   } catch (error) {
     console.error("/api/voice error:", error.message);
+    await emitAudit({
+      requestId: req.audit?.requestId || null,
+      endpoint: req.originalUrl,
+      eventType: "voice.error",
+      status: "error",
+      metadata: { error: clip(redactText(error.message || "unknown"), 300) },
+    });
     res.status(500).json({ error: "Voice processing failed", details: error.message });
   }
 });
 
 app.listen(PORT, () => {
   console.log("ATHINA backend running on port " + PORT);
+  console.log("AUDIT_LOGS_ENABLED=" + AUDIT_LOGS_ENABLED + ", AUDIT_SUPABASE_ENABLED=" + AUDIT_SUPABASE_ENABLED);
 });
