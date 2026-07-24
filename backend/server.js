@@ -107,6 +107,145 @@ const transcribeSpeech = async (audioBase64) => {
   return String(data.text || "").trim() || null;
 };
 
+const getGitHubConfig = () => ({
+  token: process.env.GITHUB_TOKEN,
+  owner: process.env.GITHUB_OWNER || "Mahmoud-1298",
+  repo: process.env.GITHUB_REPO || "ATHINA",
+  branch: process.env.GITHUB_BRANCH || "main",
+});
+
+const getGitHubHeaders = (token) => ({
+  Authorization: "Bearer " + token,
+  Accept: "application/vnd.github+json",
+  "User-Agent": "ATHINA-Agent",
+});
+
+const toBase64Utf8 = (value) => Buffer.from(String(value || ""), "utf8").toString("base64");
+
+const fetchGitHubRepoDetails = async () => {
+  const { token, owner, repo } = getGitHubConfig();
+  if (!token) {
+    throw new Error("GITHUB_TOKEN is not configured");
+  }
+
+  const headers = getGitHubHeaders(token);
+  const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
+  if (!repoRes.ok) {
+    const errText = await repoRes.text();
+    throw new Error(`GitHub API error: ${repoRes.status} ${errText}`);
+  }
+
+  const repoData = await repoRes.json();
+  const commitsRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=5`, { headers });
+  const langsRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/languages`, { headers });
+
+  const commitsData = commitsRes.ok ? await commitsRes.json() : [];
+  const langsData = langsRes.ok ? await langsRes.json() : {};
+
+  return {
+    id: repoData.id,
+    name: repoData.name,
+    full_name: repoData.full_name,
+    owner: repoData.owner?.login,
+    description: repoData.description,
+    url: repoData.html_url,
+    default_branch: repoData.default_branch,
+    language: repoData.language,
+    stars: repoData.stargazers_count,
+    forks: repoData.forks_count,
+    watchers: repoData.watchers_count,
+    open_issues: repoData.open_issues_count,
+    private: repoData.private,
+    created_at: repoData.created_at,
+    updated_at: repoData.updated_at,
+    pushed_at: repoData.pushed_at,
+    size: repoData.size,
+    topics: repoData.topics || [],
+    license: repoData.license?.name || null,
+    homepage: repoData.homepage,
+    languages: langsData,
+    commits: (commitsData || []).map((c) => ({
+      sha: c.sha,
+      message: c.commit?.message,
+      author: c.commit?.author?.name,
+      date: c.commit?.author?.date,
+    })),
+  };
+};
+
+const syncFilesToGitHub = async (files) => {
+  const { token, owner, repo, branch } = getGitHubConfig();
+  if (!token) {
+    throw new Error("GITHUB_TOKEN is not configured");
+  }
+
+  const headers = getGitHubHeaders(token);
+  const results = [];
+
+  for (const file of files) {
+    const { path: filePath, content, message } = file || {};
+    if (!filePath) {
+      results.push({ path: null, success: false, error: "Missing file path" });
+      continue;
+    }
+
+    try {
+      const checkRes = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`,
+        { headers }
+      );
+
+      let sha = null;
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        sha = checkData.sha;
+      }
+
+      const pushRes = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
+        {
+          method: "PUT",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: message || `Sync ${filePath}`,
+            content: toBase64Utf8(content),
+            branch,
+            ...(sha ? { sha } : {}),
+          }),
+        }
+      );
+
+      if (pushRes.ok) {
+        const pushData = await pushRes.json();
+        results.push({
+          path: filePath,
+          success: true,
+          sha: pushData.commit?.sha,
+          action: sha ? "updated" : "created",
+        });
+      } else {
+        const errData = await pushRes.json().catch(() => ({}));
+        results.push({
+          path: filePath,
+          success: false,
+          error: errData.message || `HTTP ${pushRes.status}`,
+        });
+      }
+    } catch (error) {
+      results.push({ path: filePath, success: false, error: error.message });
+    }
+  }
+
+  const succeeded = results.filter((r) => r.success).length;
+  const failed = results.filter((r) => !r.success).length;
+
+  return {
+    success: failed === 0,
+    summary: `${succeeded} synced, ${failed} failed`,
+    results,
+  };
+};
+
 // --- Routes ---
 app.get("/", (_req, res) => {
   res.json({ ok: true, service: "ATHINA backend", architecture: "orchestrator + planner + memory + rule engine + execution engine + tools", endpoints: ["/health", "/api/agent", "/api/chat", "/api/speak", "/api/voice", "/api/preview"] });
@@ -124,6 +263,105 @@ app.get("/api/history/:sessionId", async (req, res) => {
   } catch (error) {
     console.error("/api/history error:", error.message);
     res.status(500).json({ error: "Failed to load history", details: error.message });
+  }
+});
+
+// Legacy-compatible function proxy routes for gradual migration.
+app.post("/api/functions/:functionName", async (req, res) => {
+  try {
+    const functionName = String(req.params.functionName || "");
+
+    if (functionName === "athinaAgent") {
+      const { message = "", sessionId = "default", locationContext = null } = req.body || {};
+      if (!String(message).trim()) return res.status(400).json({ error: "Missing message" });
+      const result = await orchestrate({ message, sessionId, mode: "text", locationContext });
+      return res.json(result);
+    }
+
+    if (functionName === "geocode") {
+      const { query } = req.body || {};
+      if (!query) return res.status(400).json({ error: "Missing query" });
+
+      const url = new URL("https://nominatim.openstreetmap.org/search");
+      url.searchParams.set("format", "json");
+      url.searchParams.set("addressdetails", "1");
+      url.searchParams.set("limit", "5");
+      url.searchParams.set("q", String(query));
+
+      const response = await fetchWithTimeout(url.toString(), {
+        headers: { "User-Agent": "ATHINA-Agent/1.0", Accept: "application/json" },
+      });
+
+      if (!response.ok) {
+        return res.status(502).json({ error: "Geocoding failed with status " + response.status });
+      }
+
+      const results = await response.json();
+      return res.json({
+        results: (results || []).map((r) => ({
+          name: r.display_name,
+          lat: Number(r.lat),
+          lng: Number(r.lon),
+          type: r.type,
+          category: r.category,
+        })),
+      });
+    }
+
+    if (functionName === "voiceSynthesis") {
+      const { text } = req.body || {};
+      if (!text || !String(text).trim()) {
+        return res.status(400).json({ error: "Missing text" });
+      }
+
+      const audio = await synthesizeSpeech(String(text));
+      if (!audio) {
+        return res.status(500).json({ error: "ElevenLabs API key not configured" });
+      }
+      return res.json({ audio, format: "mp3" });
+    }
+
+    if (functionName === "elevenLabsSignedUrl") {
+      const apiKey = process.env.ELEVENLABS_API_KEY;
+      const agentId = process.env.ELEVENLABS_AGENT_ID || "agent_3301kt6djmwmet7tp8n2jjs9f3f5";
+      if (!apiKey) {
+        return res.status(500).json({ error: "ElevenLabs API key not configured" });
+      }
+
+      const response = await fetch(
+        `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${agentId}`,
+        {
+          method: "GET",
+          headers: { "xi-api-key": apiKey },
+        }
+      );
+
+      if (!response.ok) {
+        const errText = await response.text();
+        return res.status(502).json({ error: `ElevenLabs error ${response.status}: ${errText}` });
+      }
+
+      const data = await response.json();
+      return res.json({ signed_url: data.signed_url });
+    }
+
+    if (functionName === "githubRepo") {
+      const repo = await fetchGitHubRepoDetails();
+      return res.json({ repo });
+    }
+
+    if (functionName === "syncToGithub") {
+      const { files } = req.body || {};
+      if (!Array.isArray(files) || files.length === 0) {
+        return res.status(400).json({ error: "Missing files array" });
+      }
+      const result = await syncFilesToGitHub(files);
+      return res.json(result);
+    }
+
+    return res.status(404).json({ error: `Unknown function: ${functionName}` });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || "Function call failed" });
   }
 });
 

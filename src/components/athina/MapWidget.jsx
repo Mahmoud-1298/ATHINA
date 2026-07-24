@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { invokeFunction } from '@/lib/functionApi';
 import Globe3D from './Globe3D';
 import { Search, Loader2, Globe, ChevronDown, ChevronUp, Crosshair, Copy, Check } from 'lucide-react';
 
@@ -32,7 +32,7 @@ export default function MapWidget({ coords, onCoordinatesReady }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await base44.functions.invoke('geocode', { query });
+      const res = await invokeFunction('geocode', { query });
       const results = (res.data && res.data.results) || [];
       if (results.length === 0) {
         setError('No locations found for "' + query + '"');

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { invokeFunction } from '@/lib/functionApi';
 import { useAthinaVoice } from '@/hooks/useAthinaVoice';
 import { Send, Loader2, Sparkles, MapPin, CloudSun, Clock, Search, Github, Square, Power } from 'lucide-react';
 
@@ -131,9 +131,14 @@ export default function AgentConsole({ onActions, onAvatarState }) {
   }, [messages, loading]);
 
   useEffect(() => {
-    base44.auth.me().then((user) => {
-      if (user?.id) setSessionId(user.id);
-    }).catch(() => {});
+    const stored = localStorage.getItem('athina_session_id');
+    if (stored) {
+      setSessionId(stored);
+      return;
+    }
+    const generated = crypto.randomUUID();
+    localStorage.setItem('athina_session_id', generated);
+    setSessionId(generated);
   }, []);
 
   useEffect(() => {
@@ -166,7 +171,7 @@ export default function AgentConsole({ onActions, onAvatarState }) {
     setInput('');
     setLoading(true);
     try {
-      const res = await base44.functions.invoke('athinaAgent', { message: text, sessionId });
+      const res = await invokeFunction('athinaAgent', { message: text, sessionId });
       const data = res.data;
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply, actions: data.actions || [] }]);
       if (onActions && data.actions) onActions(data.actions);
@@ -181,16 +186,18 @@ export default function AgentConsole({ onActions, onAvatarState }) {
             .replace(/\b(show me|show|locate|find|where is|where's|point to|point me to|point|on the map|on the globe|on map|location of|place called|take me to|go to|the|a|an|in|at|near|of)\b/gi, ' ')
             .replace(/\?/g, '').replace(/\s+/g, ' ').trim();
           if (locQuery) {
-            const geoRes = await base44.functions.invoke('geocode', { query: locQuery });
+            const geoRes = await invokeFunction('geocode', { query: locQuery });
             const results = geoRes.data?.results || [];
             if (results.length > 0 && onActions) {
               onActions([{ type: 'geocode', name: results[0].name, lat: results[0].lat, lng: results[0].lng }]);
             }
           }
-        } catch (e) {}
+        } catch (e) {
+          // ignore geocode fallback failures; agent response is already shown
+        }
       }
 
-      // Voice responses are handled by ElevenLabs WebSocket
+      // Voice responses are handled by ElevenLabs WebSocket.
     } catch (err) {
       const errorMsg = err.response?.data?.error || err.message || 'Failed to get response';
       setMessages((prev) => [...prev, { role: 'assistant', content: 'I encountered an error: ' + errorMsg }]);
@@ -206,8 +213,7 @@ export default function AgentConsole({ onActions, onAvatarState }) {
       setMessages((prev) => [...prev, { role: 'user', content: text }]);
       setLoading(true);
       // Call athinaAgent to get clean reply + structured actions (map, directions, browse)
-      voiceActionPromiseRef.current = base44.functions
-        .invoke('athinaAgent', { message: text, sessionId })
+      voiceActionPromiseRef.current = invokeFunction('athinaAgent', { message: text, sessionId })
         .then((res) => {
           const data = res.data;
           if (onActions && data.actions) onActions(data.actions);

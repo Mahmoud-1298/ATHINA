@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
 import DarkMap from '@/components/athina/DarkMap';
 import AthinaAvatar from '@/components/athina/AthinaAvatar';
 import AgentConsole from '@/components/athina/AgentConsole';
@@ -20,10 +19,18 @@ export default function CommandCenter() {
   }, []);
 
   useEffect(() => {
-    base44.auth.me().then((user) => {
-      if (user?.full_name) setUserName(user.full_name);
-      else if (user?.email) setUserName(user.email.split('@')[0]);
-    }).catch(() => {});
+    try {
+      const storedUser = localStorage.getItem('athina_user');
+      if (storedUser) {
+        const user = JSON.parse(storedUser);
+        if (user?.full_name) setUserName(user.full_name);
+        else if (user?.email) setUserName(String(user.email).split('@')[0]);
+        return;
+      }
+    } catch {
+      // ignore local storage parsing issues and fallback to default display name
+    }
+    setUserName('Operator');
   }, []);
 
   const handleActions = (actions) => {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { invokeFunction } from '@/lib/functionApi';
 import { Star, GitFork, Eye, CircleDot, Calendar, GitCommit, ExternalLink, ArrowLeft, MapPin } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import MapWidget from '@/components/athina/MapWidget';
@@ -14,7 +14,7 @@ export default function AthinaRepo() {
   useEffect(() => {
     const fetchRepo = async () => {
       try {
-        const res = await base44.functions.invoke('githubRepo', {});
+        const res = await invokeFunction('githubRepo', {});
         setRepo(res.data.repo);
       } catch (e) {
         setError(e.response?.data?.error || e.message || 'Failed to load repo');

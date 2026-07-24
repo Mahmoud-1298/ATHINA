@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { invokeFunction } from '@/lib/functionApi';
 
 const AGENT_ID = 'agent_3301kt6djmwmet7tp8n2jjs9f3f5';
 
@@ -74,7 +74,7 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     if (!text || !text.trim()) return;
     setSpeaking(true);
     try {
-      const res = await base44.functions.invoke('voiceSynthesis', { text });
+      const res = await invokeFunction('voiceSynthesis', { text });
       if (res.data?.audio) {
         await playMp3Base64(res.data.audio);
       } else {
@@ -196,7 +196,7 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
 
       // Try signed URL first (for private agents with auth enabled)
       try {
-        const res = await base44.functions.invoke('elevenLabsSignedUrl', {});
+        const res = await invokeFunction('elevenLabsSignedUrl', {});
         wsUrl = res.data?.signed_url;
       } catch (e) {
         console.warn('Signed URL failed, trying direct connection');

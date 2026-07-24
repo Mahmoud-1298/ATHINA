@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { invokeFunction } from '@/lib/functionApi';
 import { Send, Loader2, Bot, User, MapPin, Search, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 
 export default function ChatPanel({ onLocate }) {
@@ -22,7 +22,7 @@ export default function ChatPanel({ onLocate }) {
     setInput('');
     setLoading(true);
     try {
-      const res = await base44.functions.invoke('athinaAgent', { message: currentInput });
+      const res = await invokeFunction('athinaAgent', { message: currentInput });
       const data = res.data;
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply, actions: data.actions || [] }]);
       const locateAction = (data.actions || []).find((a) => a.type === 'locate' && a.success);

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { invokeFunction } from '@/lib/functionApi';
 import InteractiveMap from '@/components/athina/InteractiveMap';
 import { Search, Loader2, ArrowLeft, MapPin } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -19,7 +19,7 @@ export default function AthinaMap() {
     setLoading(true);
     setError(null);
     try {
-      const res = await base44.functions.invoke('geocode', { query });
+      const res = await invokeFunction('geocode', { query });
       const found = (res.data && res.data.results) || [];
       if (found.length === 0) {
         setError('No locations found for "' + query + '"');
