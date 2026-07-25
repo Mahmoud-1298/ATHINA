@@ -49,12 +49,6 @@ const ensureSupabase = () => {
   if (!sb) {
     throw new Error("Supabase is not configured for proposal validation.");
   }
-  if (!hasLikelyServiceRoleKey()) {
-    throw new Error(
-      "Supabase validator requires SUPABASE_SERVICE_ROLE_KEY (service role). " +
-      "Current runtime key is missing or is publishable/anon, which cannot list private storage files."
-    );
-  }
   return sb;
 };
 
