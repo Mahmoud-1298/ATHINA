@@ -49,6 +49,12 @@ const ensureSupabase = () => {
   if (!sb) {
     throw new Error("Supabase is not configured for proposal validation.");
   }
+  if (!hasLikelyServiceRoleKey()) {
+    throw new Error(
+      "Supabase validator requires SUPABASE_SERVICE_ROLE_KEY (service role). " +
+      "Current runtime key is missing or is publishable/anon, which cannot list private storage files."
+    );
+  }
   return sb;
 };
 
@@ -56,6 +62,16 @@ const hasLikelyServiceRoleKey = () => {
   const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
   if (!key) return false;
   return !/^sb_(publishable|anon)_/i.test(key);
+};
+
+const detectKeyKind = () => {
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
+  if (!key) return "missing";
+  if (/^sb_publishable_/i.test(key)) return "publishable";
+  if (/^sb_anon_/i.test(key)) return "anon";
+  if (/^sb_secret_/i.test(key)) return "secret";
+  if (key.split(".").length === 3) return "jwt";
+  return "unknown";
 };
 
 const toBuffer = async (blob) => {
@@ -271,6 +287,7 @@ export const getProposalValidatorDebug = async () => {
       }
     })(),
     hasServiceRoleKey: hasLikelyServiceRoleKey(),
+    keyKind: detectKeyKind(),
     prefixList,
     rootList,
     detectedReferenceCount: referenceFiles.length,

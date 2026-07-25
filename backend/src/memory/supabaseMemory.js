@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 
 // Private Supabase project (hardcoded defaults, overridable by env vars)
 const SUPABASE_URL = process.env.SUPABASE_URL || "https://mehcuixkxkbnebjezcwo.supabase.co";
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "sb_publishable_LHvc6k-9W16OTc4O8lHIkQ_uiSm6BhM";
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 let supabase = null;
 
