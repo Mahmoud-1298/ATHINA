@@ -52,6 +52,12 @@ const ensureSupabase = () => {
   return sb;
 };
 
+const hasLikelyServiceRoleKey = () => {
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
+  if (!key) return false;
+  return !/^sb_(publishable|anon)_/i.test(key);
+};
+
 const toBuffer = async (blob) => {
   const arrayBuffer = await blob.arrayBuffer();
   return Buffer.from(arrayBuffer);
@@ -223,6 +229,52 @@ export const getProposalValidatorContext = async () => {
       size: file.size,
       excerpt: trimForPrompt(file.content, 220),
     })),
+  };
+};
+
+export const getProposalValidatorDebug = async () => {
+  const sb = ensureSupabase();
+  const prefix = VALIDATOR_REFERENCE_PREFIX;
+
+  const inspect = async (folder) => {
+    const { data, error } = await sb.storage.from(VALIDATOR_BUCKET).list(folder, {
+      limit: 100,
+      offset: 0,
+      sortBy: { column: "name", order: "asc" },
+    });
+    return {
+      folder: folder || "/",
+      error: error ? error.message : null,
+      count: Array.isArray(data) ? data.length : 0,
+      sample: (data || []).slice(0, 12).map((item) => ({
+        name: item.name,
+        id: item.id,
+      })),
+    };
+  };
+
+  const [prefixList, rootList] = await Promise.all([
+    inspect(prefix),
+    inspect(""),
+  ]);
+
+  const referenceFiles = await getReferenceFiles();
+  return {
+    success: true,
+    bucket: VALIDATOR_BUCKET,
+    referencePrefix: prefix,
+    supabaseUrlHost: (() => {
+      try {
+        return new URL(process.env.SUPABASE_URL || "").host || null;
+      } catch {
+        return null;
+      }
+    })(),
+    hasServiceRoleKey: hasLikelyServiceRoleKey(),
+    prefixList,
+    rootList,
+    detectedReferenceCount: referenceFiles.length,
+    detectedReferenceSample: referenceFiles.slice(0, 12).map((file) => file.path),
   };
 };
 

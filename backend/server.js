@@ -3,7 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import crypto from "crypto";
 import { orchestrate } from "./src/orchestrator.js";
-import { getProposalValidatorContext, validateProposalUpload } from "./src/proposalValidator.js";
+import { getProposalValidatorContext, getProposalValidatorDebug, validateProposalUpload } from "./src/proposalValidator.js";
 import { callOpenRouter, DEFAULT_MODEL } from "./src/utils/llmClient.js";
 import { getHistory, saveTurn, saveAuditLog } from "./src/memory/supabaseMemory.js";
 import { fetchWithTimeout, normalizeUrl, escapeHtml } from "./src/utils/helpers.js";
@@ -405,6 +405,11 @@ app.post("/api/functions/:functionName", async (req, res) => {
     if (functionName === "proposalValidatorContext") {
       const context = await getProposalValidatorContext();
       return res.json(context);
+    }
+
+    if (functionName === "proposalValidatorDebug") {
+      const debug = await getProposalValidatorDebug();
+      return res.json(debug);
     }
 
     if (functionName === "validateProposal") {
