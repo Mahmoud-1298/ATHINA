@@ -36,6 +36,14 @@ const detectCategory = (fileName) => {
   return "context";
 };
 
+const isReferenceCandidate = (path) => {
+  const normalized = normalizeName(path);
+  if (!normalized) return false;
+  if (normalized.startsWith(`${normalizeName(VALIDATOR_UPLOAD_PREFIX)}/`)) return false;
+  if (normalized.includes("/.")) return false;
+  return /\.(pdf|docx|txt|md|json)$/i.test(normalized);
+};
+
 const ensureSupabase = () => {
   const sb = getSupabaseClient();
   if (!sb) {
@@ -129,12 +137,15 @@ const listAllReferenceObjects = async (sb, folder = VALIDATOR_REFERENCE_PREFIX, 
   for (const entry of entries) {
     if (!entry?.name) continue;
     if (entry.id === null) {
-      await listAllReferenceObjects(sb, `${folder}/${entry.name}`.replace(/^\/+/, ""), 0, acc);
+      const nestedFolder = [folder, entry.name].filter(Boolean).join("/").replace(/^\/+/, "");
+      await listAllReferenceObjects(sb, nestedFolder, 0, acc);
       continue;
     }
+    const fullPath = [folder, entry.name].filter(Boolean).join("/").replace(/^\/+/, "");
+    if (!isReferenceCandidate(fullPath)) continue;
     acc.push({
       name: entry.name,
-      path: `${folder}/${entry.name}`.replace(/^\/+/, ""),
+      path: fullPath,
       updatedAt: entry.updated_at || null,
       size: entry.metadata?.size || null,
       category: detectCategory(entry.name),
@@ -154,7 +165,11 @@ const getReferenceFiles = async () => {
   }
 
   const sb = ensureSupabase();
-  const listedFiles = await listAllReferenceObjects(sb);
+  const primaryPrefix = VALIDATOR_REFERENCE_PREFIX;
+  const listedPrimary = await listAllReferenceObjects(sb, primaryPrefix);
+  const listedFiles = listedPrimary.length > 0
+    ? listedPrimary
+    : (primaryPrefix ? await listAllReferenceObjects(sb, "") : listedPrimary);
   const hydratedFiles = [];
 
   for (const file of listedFiles) {
@@ -169,7 +184,7 @@ const getReferenceFiles = async () => {
 
   referenceCache = {
     expiresAt: Date.now() + CACHE_TTL_MS,
-    files: hydratedFiles,
+    files: hydratedFiles.map((file) => ({ ...file, sourcePrefix: primaryPrefix })),
   };
 
   return hydratedFiles;
@@ -199,6 +214,7 @@ export const getProposalValidatorContext = async () => {
     success: true,
     bucket: VALIDATOR_BUCKET,
     referencePrefix: VALIDATOR_REFERENCE_PREFIX,
+    referenceCount: referenceFiles.length,
     referenceFiles: referenceFiles.map((file) => ({
       name: file.name,
       path: file.path,
@@ -223,7 +239,10 @@ export const validateProposalUpload = async ({ fileName, mimeType, contentBase64
 
   const referenceFiles = await getReferenceFiles();
   if (!referenceFiles.length) {
-    throw new Error("No reference files were found in Supabase storage. Upload your legal, finance, pricing, or architecture reference files first.");
+    throw new Error(
+      `No reference files were found in Supabase storage bucket "${VALIDATOR_BUCKET}" under prefix "${VALIDATOR_REFERENCE_PREFIX || "/"}". ` +
+      "Upload your legal, finance, pricing, or architecture files there, or set SUPABASE_VALIDATOR_REFERENCE_PREFIX to the folder you actually use."
+    );
   }
 
   const proposalStoragePath = await uploadProposalCopy({ buffer, fileName, mimeType, userId, sessionId });
