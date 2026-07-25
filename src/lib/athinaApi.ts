@@ -1,3 +1,5 @@
+import { getClientIdentity, getClientUserId } from "./clientIdentity";
+
 export interface AgentLocateAction {
   type: "locate";
   query: string;
@@ -82,15 +84,16 @@ const parseJsonSafe = async (response: Response) => {
 
 export const sendAgentMessage = async (
   message: string,
-  sessionId = "ui-session",
+  sessionId = getClientIdentity().sessionId,
   mode: "text" | "voice" = "text",
   locationContext?: MapLocationContext | null
 ): Promise<AgentResponse> => {
+  const { userId } = getClientIdentity();
   const url = `${BACKEND_BASE_URL}/api/agent`;
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, sessionId, mode, locationContext }),
+    body: JSON.stringify({ message, sessionId, userId, mode, locationContext }),
   });
 
   const data = await parseJsonSafe(response);
@@ -102,8 +105,11 @@ export const sendAgentMessage = async (
   return data;
 };
 
-export const loadConversationHistory = async (sessionId = "ui-session") => {
-  const response = await fetch(`${BACKEND_BASE_URL}/api/history/${encodeURIComponent(sessionId)}`);
+export const loadConversationHistory = async (sessionId = getClientIdentity().sessionId) => {
+  const userId = getClientUserId();
+  const params = new URLSearchParams();
+  if (userId) params.set("userId", userId);
+  const response = await fetch(`${BACKEND_BASE_URL}/api/history/${encodeURIComponent(sessionId)}${params.toString() ? `?${params.toString()}` : ""}`);
   const data = await response.json();
 
   if (!response.ok) {
@@ -113,11 +119,12 @@ export const loadConversationHistory = async (sessionId = "ui-session") => {
   return data as { success: boolean; sessionId: string; messages: ConversationMessage[] };
 };
 
-export const sendVoiceMessage = async (audioBase64: string, sessionId = "ui-session") => {
+export const sendVoiceMessage = async (audioBase64: string, sessionId = getClientIdentity().sessionId) => {
+  const { userId } = getClientIdentity();
   const response = await fetch(`${BACKEND_BASE_URL}/api/voice`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ audioBase64, sessionId }),
+    body: JSON.stringify({ audioBase64, sessionId, userId }),
   });
 
   const data = await response.json();

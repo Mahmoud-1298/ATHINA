@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import crypto from "crypto";
 import { orchestrate } from "./src/orchestrator.js";
+import { getProposalValidatorContext, validateProposalUpload } from "./src/proposalValidator.js";
 import { callOpenRouter, DEFAULT_MODEL } from "./src/utils/llmClient.js";
 import { getHistory, saveTurn, saveAuditLog } from "./src/memory/supabaseMemory.js";
 import { fetchWithTimeout, normalizeUrl, escapeHtml } from "./src/utils/helpers.js";
@@ -18,7 +19,7 @@ app.use(cors({
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
 }));
-app.use(express.json({ limit: "15mb" }));
+app.use(express.json({ limit: "25mb" }));
 
 const AUDIT_LOGS_ENABLED = process.env.AUDIT_LOGS_ENABLED !== "false";
 const AUDIT_SUPABASE_ENABLED = process.env.AUDIT_SUPABASE_ENABLED !== "false";
@@ -365,7 +366,8 @@ app.get("/health", (_req, res) => {
 app.get("/api/history/:sessionId", async (req, res) => {
   try {
     const sessionId = String(req.params.sessionId || "default");
-    const history = await getHistory(sessionId);
+    const userId = req.query.userId ? String(req.query.userId) : null;
+    const history = await getHistory(sessionId, 20, userId);
     res.json({ success: true, sessionId, messages: history });
   } catch (error) {
     console.error("/api/history error:", error.message);
@@ -380,12 +382,13 @@ app.post("/api/functions/:functionName", async (req, res) => {
     const requestId = req.audit?.requestId || null;
 
     if (functionName === "athinaAgent") {
-      const { message = "", sessionId = "default", locationContext = null } = req.body || {};
+      const { message = "", sessionId = "default", userId = null, locationContext = null } = req.body || {};
       if (!String(message).trim()) return res.status(400).json({ error: "Missing message" });
-      const result = await orchestrate({ message, sessionId, mode: "text", locationContext });
+      const result = await orchestrate({ message, sessionId, userId, mode: "text", locationContext });
       await emitAudit({
         requestId,
         sessionId,
+        actorId: userId || null,
         endpoint: req.originalUrl,
         eventType: "agent.result",
         status: result.success ? "success" : "error",
@@ -394,6 +397,30 @@ app.post("/api/functions/:functionName", async (req, res) => {
           via: "functions.athinaAgent",
           tasksCount: Array.isArray(result.tasks) ? result.tasks.length : 0,
           actionsCount: Array.isArray(result.actions) ? result.actions.length : 0,
+        },
+      });
+      return res.json(result);
+    }
+
+    if (functionName === "proposalValidatorContext") {
+      const context = await getProposalValidatorContext();
+      return res.json(context);
+    }
+
+    if (functionName === "validateProposal") {
+      const { fileName = "", mimeType = "application/octet-stream", contentBase64 = "", sessionId = "default", userId = null } = req.body || {};
+      const result = await validateProposalUpload({ fileName, mimeType, contentBase64, sessionId, userId });
+      await emitAudit({
+        requestId,
+        sessionId,
+        actorId: userId || null,
+        endpoint: req.originalUrl,
+        eventType: "proposal.validation",
+        status: result.success ? "success" : "error",
+        metadata: {
+          fileName: clip(fileName, 120),
+          reportId: result.reportId || null,
+          overallScore: result.result?.overallScore || null,
         },
       });
       return res.json(result);
@@ -506,12 +533,13 @@ app.post("/api/functions/:functionName", async (req, res) => {
 // Main orchestrator endpoint Ã¢ÂÂ autonomous agent flow
 app.post("/api/agent", async (req, res) => {
   try {
-    const { message = "", sessionId = "default", mode = "text", locationContext = null } = req.body;
+    const { message = "", sessionId = "default", userId = null, mode = "text", locationContext = null } = req.body;
     if (!message.trim()) return res.status(400).json({ error: "Missing message" });
-    const result = await orchestrate({ message, sessionId, mode, locationContext });
+    const result = await orchestrate({ message, sessionId, userId, mode, locationContext });
     await emitAudit({
       requestId: req.audit?.requestId || null,
       sessionId,
+      actorId: userId || null,
       endpoint: req.originalUrl,
       eventType: "agent.result",
       status: result.success ? "success" : "error",

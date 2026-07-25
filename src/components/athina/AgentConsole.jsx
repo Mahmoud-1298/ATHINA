@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { invokeFunction } from '@/lib/functionApi';
+import { getClientUserId } from '@/lib/clientIdentity';
 import { useAthinaVoice } from '@/hooks/useAthinaVoice';
 import { Send, Loader2, Sparkles, MapPin, CloudSun, Clock, Search, Github, Square, Power } from 'lucide-react';
 
@@ -154,6 +155,7 @@ export default function AgentConsole({ onActions, onAvatarState }) {
 
   const sendMessage = async (text) => {
     if (!text || typeof text !== 'string' || !text.trim() || loading) return;
+    const userId = getClientUserId();
     // Handle URL open requests entirely client-side (the agent can't open browser tabs)
     const urlMatch = text.match(/(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+\.[a-z]{2,}(?:\/[^\s]*)?)/i);
     if (urlMatch && /\b(open|browse|visit|go to)\b/i.test(text)) {
@@ -171,7 +173,7 @@ export default function AgentConsole({ onActions, onAvatarState }) {
     setInput('');
     setLoading(true);
     try {
-      const res = await invokeFunction('athinaAgent', { message: text, sessionId });
+      const res = await invokeFunction('athinaAgent', { message: text, sessionId, userId });
       const data = res.data;
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply, actions: data.actions || [] }]);
       if (onActions && data.actions) onActions(data.actions);
@@ -212,8 +214,9 @@ export default function AgentConsole({ onActions, onAvatarState }) {
     onUserTranscript: (text) => {
       setMessages((prev) => [...prev, { role: 'user', content: text }]);
       setLoading(true);
+      const userId = getClientUserId();
       // Call athinaAgent to get clean reply + structured actions (map, directions, browse)
-      voiceActionPromiseRef.current = invokeFunction('athinaAgent', { message: text, sessionId })
+      voiceActionPromiseRef.current = invokeFunction('athinaAgent', { message: text, sessionId, userId })
         .then((res) => {
           const data = res.data;
           if (onActions && data.actions) onActions(data.actions);

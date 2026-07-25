@@ -45,11 +45,13 @@ const ACTION_KEYWORDS = [
   /\b(book|reserv|hotel|flight|restaurant|rent)\b/i,
 ];
 
-export const plan = async ({ message, history, locationNote = "" }) => {
+export const plan = async ({ message, history, locationNote = "", memoryNote = "" }) => {
   const toolList = getToolSchemas().map((t) => "- " + t.name + ": " + t.description).join("\n");
-  const userContent = locationNote ? locationNote + "\n\nUser request: " + message : message;
+  const userContent = [memoryNote, locationNote, "User request: " + message]
+    .filter(Boolean)
+    .join("\n\n");
   const messages = [
-    { role: "system", content: PLANNER_PROMPT + "\n\nAvailable tools:\n" + toolList },
+    { role: "system", content: PLANNER_PROMPT + "\n\nWhen relevant, use the provided prior conversation memory as factual context before deciding how to answer.\n\nAvailable tools:\n" + toolList },
     ...history.slice(-4),
     { role: "user", content: userContent },
   ];

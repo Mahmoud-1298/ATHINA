@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, FormEvent } from "react";
 import { motion } from "framer-motion";
-import { ExternalLink, Send, X } from "lucide-react";
+import { ArrowUpRight, ExternalLink, Send, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import VoiceOrb from "../components/VoiceOrb.tsx";
 import StatusBar from "../components/StatusBar.tsx";
 import JarvisParticles from "../components/JarvisParticles.tsx";
@@ -16,6 +17,7 @@ import {
   sendAgentMessage,
   speakText,
 } from "../lib/athinaApi.ts";
+import { getClientSessionId } from "../lib/clientIdentity";
 
 interface Message {
   id: string;
@@ -36,7 +38,7 @@ interface BrowserTarget {
   fetchedAt?: string;
 }
 
-const SESSION_ID = "ui-session";
+const SESSION_ID = getClientSessionId();
 
 type SpeechRecognitionConstructor = new () => SpeechRecognition;
 
@@ -409,9 +411,18 @@ const Index = () => {
 
       <motion.header className="fixed left-0 right-0 top-0 z-20 flex items-center justify-between px-6 py-4">
         <span className="font-mono text-[10px] tracking-[0.4em] text-cyan-300/70">ATHINA v2</span>
-        <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-white/35">
-          {isConnecting ? "connecting" : isProcessing ? "processing" : isVoiceSessionOpen ? "voice session live" : "online"}
-        </span>
+        <div className="flex items-center gap-3">
+          <Link
+            to="/proposal-validator"
+            className="inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.22em] text-emerald-200 transition hover:bg-emerald-400/20"
+          >
+            Proposal Validator
+            <ArrowUpRight className="h-3.5 w-3.5" />
+          </Link>
+          <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-white/35">
+            {isConnecting ? "connecting" : isProcessing ? "processing" : isVoiceSessionOpen ? "voice session live" : "online"}
+          </span>
+        </div>
       </motion.header>
 
       <div className="relative z-30 flex w-full max-w-4xl flex-col items-center gap-6 px-4">
