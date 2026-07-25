@@ -13,6 +13,7 @@ import {
 } from "./memory/supabaseMemory.js";
 import { plan } from "./planner.js";
 import { execute as executeTasks } from "./executionEngine.js";
+import { executeTool } from "./tools/index.js";
 import { validatePlan, validateTasks, checkSafety } from "./ruleEngine.js";
 import { getQuickReply, buildCompactExecutionReply } from "./llmManager.js";
 import { getEmbedding } from "./utils/embeddingClient.js";
@@ -39,6 +40,140 @@ const buildLocationContext = async (sessionId, locationContext, userId) => {
 };
 
 const buildRequestKey = (message, locationNote) => normalizeCacheText([message, locationNote].filter(Boolean).join("\n"));
+
+const parseTomorrowTimeWindow = (message) => {
+  const match = String(message || "").match(/tomorrow(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = (match[3] || "").toLowerCase();
+
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  if (hour > 23 || minute > 59) return null;
+
+  const now = new Date();
+  const start = new Date(now);
+  start.setDate(now.getDate() + 1);
+  start.setHours(hour, minute, 0, 0);
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+    label: `tomorrow at ${start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+  };
+};
+
+const buildEmailFromReply = (fromHeader = "") => {
+  const emailMatch = String(fromHeader).match(/<([^>]+)>/);
+  return {
+    fromHeader,
+    fromEmail: emailMatch ? emailMatch[1] : fromHeader,
+  };
+};
+
+const summarizeMessageBody = (message) => {
+  const text = String(message?.body || message?.snippet || "").replace(/\s+/g, " ").trim();
+  if (!text) return "I found the latest email, but it has no readable text body.";
+  return text.length > 420 ? text.slice(0, 420) + "..." : text;
+};
+
+const handleProductivityIntents = async ({ message, sessionId, userId }) => {
+  const text = String(message || "").toLowerCase();
+  const context = { sessionId, userId };
+
+  const asksLastEmail = /last email|latest email/.test(text);
+  const asksWhoFrom = asksLastEmail && /who.*from|from who/.test(text);
+  const asksSummary = asksLastEmail && /summar|summary/.test(text);
+
+  if (asksWhoFrom || asksSummary) {
+    const listed = await executeTool("email", {
+      action: "list",
+      provider: "google",
+      maxResults: 1,
+      query: "in:inbox",
+    }, context);
+
+    if (!listed.success) {
+      return { success: false, reply: "I could not read your inbox: " + (listed.error || "unknown error"), actions: [] };
+    }
+
+    const latest = Array.isArray(listed.messages) ? listed.messages[0] : null;
+    if (!latest) {
+      return { success: true, reply: "Your inbox appears empty right now.", actions: [] };
+    }
+
+    if (asksWhoFrom) {
+      const parsedFrom = buildEmailFromReply(latest.from);
+      return {
+        success: true,
+        reply: `Your latest email is from ${parsedFrom.fromEmail}. Subject: ${latest.subject || "(no subject)"}.`,
+        actions: [],
+      };
+    }
+
+    const fullMessage = await executeTool("email", {
+      action: "read",
+      provider: "google",
+      messageId: latest.id,
+    }, context);
+
+    if (!fullMessage.success) {
+      return { success: false, reply: "I found your latest email but could not open it: " + (fullMessage.error || "unknown error"), actions: [] };
+    }
+
+    const subject = fullMessage.message?.subject || latest.subject || "(no subject)";
+    const summary = summarizeMessageBody(fullMessage.message || latest);
+    return {
+      success: true,
+      reply: `Summary of your latest email (${subject}): ${summary}`,
+      actions: [],
+    };
+  }
+
+  const asksCalendarCheck = /calendar/.test(text) && /(check|anything|do i have|what.*(event|meeting)|free|available)/.test(text);
+  if (asksCalendarCheck) {
+    const window = parseTomorrowTimeWindow(message);
+    if (!window) return null;
+
+    const availability = await executeTool("calendar", {
+      action: "check_availability",
+      start: window.start,
+      end: window.end,
+    }, context);
+
+    if (!availability.success) {
+      return { success: false, reply: "I could not check your calendar: " + (availability.error || "unknown error"), actions: [] };
+    }
+
+    if (availability.isFree) {
+      return {
+        success: true,
+        reply: `You have no events at ${window.label}.`,
+        actions: [],
+      };
+    }
+
+    const events = await executeTool("calendar", {
+      action: "list_events",
+      timeMin: window.start,
+      timeMax: window.end,
+      maxResults: 10,
+    }, context);
+
+    const titles = (events.events || []).map((event) => event.title).filter(Boolean);
+    const eventSummary = titles.length ? titles.join(", ") : "one or more busy slots";
+    return {
+      success: true,
+      reply: `You do have events at ${window.label}: ${eventSummary}.`,
+      actions: [],
+    };
+  }
+
+  return null;
+};
 
 const buildMemoryNote = (memories) => {
   if (!Array.isArray(memories) || memories.length === 0) return "";
@@ -100,6 +235,28 @@ export const orchestrate = async ({ message, sessionId = "default", userId = nul
     await saveTurn(sessionId, message, quickReply.reply, userId);
     await persistReusableMemory({ sessionId, userId, message, reply: quickReply.reply, requestKey, source: "quick_reply" });
     return { success: true, reply: quickReply.reply, actions: [], sessionId, timestamp: new Date().toISOString(), quickReply: true };
+  }
+
+  const productivityIntentResult = await handleProductivityIntents({ message, sessionId, userId });
+  if (productivityIntentResult) {
+    await saveTurn(sessionId, message, productivityIntentResult.reply, userId);
+    await persistReusableMemory({
+      sessionId,
+      userId,
+      message,
+      reply: productivityIntentResult.reply,
+      actions: productivityIntentResult.actions || [],
+      requestKey,
+      source: "direct_productivity",
+    });
+    return {
+      success: Boolean(productivityIntentResult.success),
+      reply: productivityIntentResult.reply,
+      actions: productivityIntentResult.actions || [],
+      sessionId,
+      timestamp: new Date().toISOString(),
+      directAction: true,
+    };
   }
 
   const cachedAnswer = await findCachedAnswer({ sessionId, userId, requestKey });

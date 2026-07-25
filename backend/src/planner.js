@@ -17,6 +17,8 @@ const PLANNER_PROMPT = [
   "Rules: Use ${task_X.field} in params to reference results from previous tasks. Each task uses one tool. Order by dependency. Max 5 tasks. Use llm tool if no specific tool fits.",
   "For calendar checks and conditional scheduling, use calendar action ensure_slot with start/end/title in one task.",
   "For email workflows, use email action send. If prior task has options/summary, include it in body using ${task_X.note} or ${task_X.options}.",
+  "If the user asks to check availability or check existing events, DO NOT create or schedule anything unless they explicitly ask to create/add/schedule.",
+  "For reading inbox information, first use email action list, then email action read with messageId from list results.",
   "",
   "requiresPlanning MUST be true if the user asks to:",
   "- Find, show, locate, or point to any location on a map",
