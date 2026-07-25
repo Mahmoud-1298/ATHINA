@@ -15,6 +15,8 @@ const PLANNER_PROMPT = [
   'Each task: { "id": "task_1", "description": "", "tool": "tool_name", "params": {}, "depends_on": [] }',
   "",
   "Rules: Use ${task_X.field} in params to reference results from previous tasks. Each task uses one tool. Order by dependency. Max 5 tasks. Use llm tool if no specific tool fits.",
+  "For calendar checks and conditional scheduling, use calendar action ensure_slot with start/end/title in one task.",
+  "For email workflows, use email action send. If prior task has options/summary, include it in body using ${task_X.note} or ${task_X.options}.",
   "",
   "requiresPlanning MUST be true if the user asks to:",
   "- Find, show, locate, or point to any location on a map",
@@ -33,6 +35,8 @@ const PLANNER_PROMPT = [
   "'open youtube.com' -> { requiresPlanning: true, reply: '', tasks: [{ id: 'task_1', description: 'Browse youtube.com', tool: 'web_search', params: { query: 'youtube.com' }, depends_on: [] }] }",
   "'hello' -> { requiresPlanning: false, reply: 'Hello! How can I help?', tasks: [] }",
   "'what is machine learning' -> { requiresPlanning: false, reply: 'Machine learning is...', tasks: [] }",
+  "'find cheapest hotels in dubai marina for one night and email to example@gmail.com' -> { requiresPlanning: true, reply: '', tasks: [{ id: 'task_1', description: 'Find cheapest hotels in Dubai Marina', tool: 'booking', params: { query: 'cheapest hotels for one night in Dubai Marina' }, depends_on: [] }, { id: 'task_2', description: 'Send options by email', tool: 'email', params: { action: 'send', to: 'example@gmail.com', subject: 'Dubai Marina hotel options', body: 'Here are the options: ${task_1.note}. Full list: ${task_1.options}' }, depends_on: ['task_1'] }] }",
+  "'check my calendar for tomorrow 2pm to 3pm, and if free add TEST meeting' -> { requiresPlanning: true, reply: '', tasks: [{ id: 'task_1', description: 'Ensure calendar slot at 2pm tomorrow', tool: 'calendar', params: { action: 'ensure_slot', title: 'TEST', start: 'tomorrow 14:00 local time as ISO', end: 'tomorrow 15:00 local time as ISO' }, depends_on: [] }] }",
   "",
   "Return ONLY valid JSON.",
 ].join("\n");

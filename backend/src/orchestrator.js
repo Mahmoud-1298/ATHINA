@@ -137,6 +137,7 @@ export const orchestrate = async ({ message, sessionId = "default", userId = nul
   const { executed } = await executeTasks(tasks, {
     saveTaskResult: (taskSessionId, taskId, tool, result) => saveTaskResult(taskSessionId, taskId, tool, result, userId),
     sessionId,
+    userId,
   });
   const finalReply = await buildCompactExecutionReply(executed);
   await saveTurn(sessionId, message, finalReply, userId);

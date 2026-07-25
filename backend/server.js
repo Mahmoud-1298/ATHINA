@@ -7,6 +7,7 @@ import { getProposalValidatorContext, getProposalValidatorDebug, validateProposa
 import { callOpenRouter, DEFAULT_MODEL } from "./src/utils/llmClient.js";
 import { getHistory, saveTurn, saveAuditLog } from "./src/memory/supabaseMemory.js";
 import { fetchWithTimeout, normalizeUrl, escapeHtml } from "./src/utils/helpers.js";
+import { buildGoogleConnectUrl, exchangeGoogleCode, getGoogleAuthStatus, getGoogleOAuthInfo } from "./src/utils/googleWorkspace.js";
 
 dotenv.config();
 
@@ -375,6 +376,43 @@ app.get("/api/history/:sessionId", async (req, res) => {
   }
 });
 
+app.get("/api/google/connect-url", async (req, res) => {
+  try {
+    const sessionId = String(req.query.sessionId || "default");
+    const userId = req.query.userId ? String(req.query.userId) : null;
+    const result = await buildGoogleConnectUrl({ sessionId, userId });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message || "Failed to generate Google connect URL" });
+  }
+});
+
+app.get("/api/google/status", async (req, res) => {
+  try {
+    const sessionId = String(req.query.sessionId || "default");
+    const userId = req.query.userId ? String(req.query.userId) : null;
+    const status = await getGoogleAuthStatus({ sessionId, userId });
+    res.json({ success: true, ...status });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message || "Failed to get Google auth status" });
+  }
+});
+
+app.get("/api/google/oauth/callback", async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = req.query.state ? String(req.query.state) : "";
+    const result = await exchangeGoogleCode({ code, state });
+    res.type("text/html").send(
+      `<html><body style=\"font-family:system-ui;padding:24px;background:#020617;color:#e2e8f0\"><h2>ATHINA Google connection successful</h2><p>Your Google account is now connected for this ATHINA session/user.</p><pre>${escapeHtml(JSON.stringify(result, null, 2))}</pre></body></html>`
+    );
+  } catch (error) {
+    res.status(500).type("text/html").send(
+      `<html><body style=\"font-family:system-ui;padding:24px;background:#020617;color:#fecaca\"><h2>ATHINA Google connection failed</h2><p>${escapeHtml(error.message || "unknown error")}</p></body></html>`
+    );
+  }
+});
+
 // Legacy-compatible function proxy routes for gradual migration.
 app.post("/api/functions/:functionName", async (req, res) => {
   try {
@@ -405,6 +443,18 @@ app.post("/api/functions/:functionName", async (req, res) => {
     if (functionName === "proposalValidatorContext") {
       const context = await getProposalValidatorContext();
       return res.json(context);
+    }
+
+    if (functionName === "googleConnectUrl") {
+      const { sessionId = "default", userId = null } = req.body || {};
+      const payload = await buildGoogleConnectUrl({ sessionId, userId });
+      return res.json({ success: true, ...payload });
+    }
+
+    if (functionName === "googleAuthStatus") {
+      const { sessionId = "default", userId = null } = req.body || {};
+      const status = await getGoogleAuthStatus({ sessionId, userId });
+      return res.json({ success: true, ...status });
     }
 
     if (functionName === "proposalValidatorDebug") {

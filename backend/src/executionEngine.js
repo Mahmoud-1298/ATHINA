@@ -16,12 +16,12 @@ const resolveParams = (params, results) => {
   }
   return resolved;
 };
-export const execute = async (tasks, { saveTaskResult, sessionId }) => {
+export const execute = async (tasks, { saveTaskResult, sessionId, userId = null }) => {
   const results = {};
   const executed = [];
   for (const task of tasks) {
     const resolvedParams = resolveParams(task.params || {}, results);
-    const result = await executeTool(task.tool, resolvedParams);
+    const result = await executeTool(task.tool, resolvedParams, { sessionId, userId });
     results[task.id] = result;
     executed.push({ ...task, params: resolvedParams, result });
     if (saveTaskResult && sessionId) await saveTaskResult(sessionId, task.id, task.tool, result);

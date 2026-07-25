@@ -22,13 +22,13 @@ export const getToolSchemas = () =>
     ...tool.schema,
   }));
 
-export const executeTool = async (name, params) => {
+export const executeTool = async (name, params, context = {}) => {
   const tool = toolRegistry[name];
   if (!tool) {
     return { success: false, error: "Unknown tool: " + name };
   }
   try {
-    return await tool.execute(params || {});
+    return await tool.execute({ ...(params || {}), ...(context || {}) });
   } catch (error) {
     return { success: false, error: error.message, tool: name };
   }
