@@ -97,6 +97,11 @@ ALTER TABLE athina_answer_cache ENABLE ROW LEVEL SECURITY;
 ALTER TABLE athina_memory_embeddings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE athina_validation_reports ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "athina_answer_cache_all" ON athina_answer_cache;
+DROP POLICY IF EXISTS "athina_memory_embeddings_all" ON athina_memory_embeddings;
+DROP POLICY IF EXISTS "athina_validation_reports_all" ON athina_validation_reports;
+
+CREATE POLICY "athina_answer_cache_all" ON athina_answer_cache FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "athina_memory_embeddings_all" ON athina_memory_embeddings FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "athina_validation_reports_all" ON athina_validation_reports FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
