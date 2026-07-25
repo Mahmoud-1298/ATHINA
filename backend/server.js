@@ -387,6 +387,20 @@ app.get("/api/google/connect-url", async (req, res) => {
   }
 });
 
+// Direct OAuth redirect for a simple "Connect Google" button flow.
+app.get("/api/google/oauth", async (req, res) => {
+  try {
+    const sessionId = String(req.query.sessionId || "default");
+    const userId = req.query.userId ? String(req.query.userId) : null;
+    const result = await buildGoogleConnectUrl({ sessionId, userId });
+    return res.redirect(result.url);
+  } catch (error) {
+    return res.status(500).type("text/html").send(
+      `<html><body style=\"font-family:system-ui;padding:24px;background:#020617;color:#fecaca\"><h2>ATHINA Google connection failed</h2><p>${escapeHtml(error.message || "unknown error")}</p></body></html>`
+    );
+  }
+});
+
 app.get("/api/google/status", async (req, res) => {
   try {
     const sessionId = String(req.query.sessionId || "default");

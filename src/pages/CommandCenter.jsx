@@ -3,7 +3,9 @@ import DarkMap from '@/components/athina/DarkMap';
 import AthinaAvatar from '@/components/athina/AthinaAvatar';
 import AgentConsole from '@/components/athina/AgentConsole';
 import { Link } from 'react-router-dom';
-import { FileCheck2, MapPin } from 'lucide-react';
+import { CalendarCheck2, FileCheck2, MapPin } from 'lucide-react';
+import { BACKEND_BASE_URL } from '@/lib/functionApi';
+import { getClientIdentity } from '@/lib/clientIdentity';
 
 export default function CommandCenter() {
   const [mapMarkers, setMapMarkers] = useState([]);
@@ -45,6 +47,8 @@ export default function CommandCenter() {
   };
 
   const timeStr = clock.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const identity = getClientIdentity();
+  const googleConnectHref = `${BACKEND_BASE_URL}/api/google/oauth?sessionId=${encodeURIComponent(identity.sessionId || 'default')}${identity.userId ? `&userId=${encodeURIComponent(identity.userId)}` : ''}`;
 
   return (
     <div className="fixed inset-0 bg-[#06080d] text-white overflow-hidden">
@@ -75,6 +79,16 @@ export default function CommandCenter() {
             <FileCheck2 className="w-3.5 h-3.5" />
             Validator
           </Link>
+          <a
+            href={googleConnectHref}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-full border border-blue-400/30 bg-blue-500/15 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-blue-100 hover:bg-blue-500/25"
+            title="Connect Google Calendar and Gmail"
+          >
+            <CalendarCheck2 className="w-3.5 h-3.5" />
+            Google
+          </a>
           <Link to="/map" className="text-slate-500 hover:text-cyan-300/70 transition-colors" title="2D Map">
             <MapPin className="w-4 h-4" />
           </Link>
