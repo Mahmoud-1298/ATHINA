@@ -3,7 +3,7 @@ import DarkMap from '@/components/athina/DarkMap';
 import AthinaAvatar from '@/components/athina/AthinaAvatar';
 import AgentConsole from '@/components/athina/AgentConsole';
 import { Link } from 'react-router-dom';
-import { MapPin } from 'lucide-react';
+import { FileCheck2, MapPin } from 'lucide-react';
 
 export default function CommandCenter() {
   const [mapMarkers, setMapMarkers] = useState([]);
@@ -67,6 +67,14 @@ export default function CommandCenter() {
           {userName && (
             <span className="text-[10px] text-slate-500 font-mono hidden sm:inline">{userName}</span>
           )}
+          <Link
+            to="/proposal-validator"
+            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider text-emerald-200 hover:bg-emerald-400/20"
+            title="Proposal Validator"
+          >
+            <FileCheck2 className="w-3.5 h-3.5" />
+            Validator
+          </Link>
           <Link to="/map" className="text-slate-500 hover:text-cyan-300/70 transition-colors" title="2D Map">
             <MapPin className="w-4 h-4" />
           </Link>

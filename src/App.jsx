@@ -10,6 +10,7 @@ import ScrollToTop from './components/ScrollToTop';
 import AthinaRepo from './pages/AthinaRepo';
 import CommandCenter from './pages/CommandCenter';
 import AthinaMap from './pages/AthinaMap';
+import ProposalValidator from './pages/ProposalValidator';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -41,6 +42,7 @@ const AuthenticatedApp = () => {
       <Route path="/" element={<CommandCenter />} />
       <Route path="/athina-repo" element={<AthinaRepo />} />
       <Route path="/map" element={<AthinaMap />} />
+      <Route path="/proposal-validator" element={<ProposalValidator />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
   );

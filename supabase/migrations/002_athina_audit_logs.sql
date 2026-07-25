@@ -20,10 +20,3 @@ CREATE INDEX IF NOT EXISTS idx_athina_audit_logs_session_id ON athina_audit_logs
 CREATE INDEX IF NOT EXISTS idx_athina_audit_logs_event_type ON athina_audit_logs(event_type);
 
 ALTER TABLE athina_audit_logs ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "athina_audit_logs_all"
-  ON athina_audit_logs
-  FOR ALL
-  TO anon, authenticated
-  USING (true)
-  WITH CHECK (true);

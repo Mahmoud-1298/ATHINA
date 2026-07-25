@@ -296,20 +296,7 @@ const ProposalValidator = () => {
               </CardContent>
             </Card>
 
-            <Card className="border-emerald-400/15 bg-black/40 shadow-[0_18px_70px_rgba(0,0,0,0.28)]">
-              <CardHeader>
-                <CardTitle className="text-white">Demo flow</CardTitle>
-                <CardDescription className="text-emerald-50/60">
-                  This page is tuned for stakeholder demos of ATHINA as a proposal validator.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm leading-6 text-emerald-50/72">
-                <p>1. Store the fixed legal, finance, pricing, and architecture reference files in the Supabase storage bucket used by the validator.</p>
-                <p>2. Upload a customer proposal here.</p>
-                <p>3. ATHINA scores the proposal by category, explains the gaps, and returns an overall approval signal.</p>
-              </CardContent>
-            </Card>
-          </div>
+            </div>
         </div>
       </div>
     </div>
