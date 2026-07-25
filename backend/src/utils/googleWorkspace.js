@@ -31,10 +31,31 @@ const createOAuthClient = () => {
 const authContextKey = "google_oauth";
 
 const readStoredTokens = async ({ sessionId = "default", userId = null }) => {
-  if (!sessionId && !userId) return null;
-  const stored = await getContext(sessionId || "default", authContextKey, userId || null);
-  if (!stored || typeof stored !== "object") return null;
-  return stored;
+  const sessionCandidates = Array.from(new Set([
+    sessionId || "default",
+    "ui-session",
+    "default",
+  ]));
+
+  // Try user-scoped context first when available.
+  if (userId) {
+    for (const candidate of sessionCandidates) {
+      const userScoped = await getContext(candidate, authContextKey, userId);
+      if (userScoped && typeof userScoped === "object" && userScoped.refresh_token) {
+        return { ...userScoped, _source: { sessionId: candidate, userId } };
+      }
+    }
+  }
+
+  // Fall back to legacy session-only tokens (userId null).
+  for (const candidate of sessionCandidates) {
+    const sessionScoped = await getContext(candidate, authContextKey, null);
+    if (sessionScoped && typeof sessionScoped === "object" && sessionScoped.refresh_token) {
+      return { ...sessionScoped, _source: { sessionId: candidate, userId: null } };
+    }
+  }
+
+  return null;
 };
 
 export const getGoogleAuthStatus = async ({ sessionId = "default", userId = null } = {}) => {
@@ -44,6 +65,7 @@ export const getGoogleAuthStatus = async ({ sessionId = "default", userId = null
     connected: hasRefreshToken,
     sessionId,
     userId,
+    tokenSource: stored?._source || null,
     scopes: GOOGLE_SCOPES,
     redirectUri: getRedirectUri(),
   };
@@ -91,6 +113,24 @@ export const exchangeGoogleCode = async ({ code, state } = {}) => {
     scope: tokens.scope || GOOGLE_SCOPES.join(" "),
     connected_at: new Date().toISOString(),
   }, userId);
+
+  // Also save compatibility copies so existing UI session patterns can find tokens.
+  if (sessionId !== "ui-session") {
+    await saveContext("ui-session", authContextKey, {
+      refresh_token: refreshToken,
+      scope: tokens.scope || GOOGLE_SCOPES.join(" "),
+      connected_at: new Date().toISOString(),
+      source_session: sessionId,
+    }, userId);
+  }
+  if (sessionId !== "default") {
+    await saveContext("default", authContextKey, {
+      refresh_token: refreshToken,
+      scope: tokens.scope || GOOGLE_SCOPES.join(" "),
+      connected_at: new Date().toISOString(),
+      source_session: sessionId,
+    }, userId);
+  }
 
   return {
     success: true,
