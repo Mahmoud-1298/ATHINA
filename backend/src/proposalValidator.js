@@ -17,6 +17,12 @@ const DEFAULT_CATEGORIES = [
   { key: "architecture", label: "Architecture" },
 ];
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const STOP_WORDS = new Set([
+  "the", "and", "for", "with", "from", "that", "this", "are", "was", "were", "have", "has", "had", "will", "shall", "would", "should",
+  "about", "into", "over", "under", "their", "there", "where", "when", "your", "you", "our", "they", "them", "his", "her", "its",
+  "not", "but", "can", "may", "also", "than", "then", "such", "any", "all", "each", "per", "via", "use", "using", "used",
+  "proposal", "project", "solution", "services", "service", "client", "vendor", "scope", "work", "document",
+]);
 
 let referenceCache = {
   expiresAt: 0,
@@ -92,6 +98,83 @@ const extractTextFromBuffer = async (buffer, fileName, mimeType = "application/o
 
 const trimForPrompt = (text, maxChars) => String(text || "").slice(0, maxChars);
 
+const tokenizeImportantTerms = (text, limit = 900) => {
+  const tokens = String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 4 && !STOP_WORDS.has(token));
+  return new Set(tokens.slice(0, limit));
+};
+
+const extractNumericTokens = (text) => {
+  const matches = String(text || "").match(/(?:\$|usd\s*)?\d+(?:[.,]\d+)?(?:\s*(?:k|m|b|%|percent|months?|days?|years?))?/gi) || [];
+  return new Set(matches.map((item) => item.toLowerCase().replace(/\s+/g, "").replace(/,/g, "")));
+};
+
+const jaccardSimilarity = (setA, setB) => {
+  if (!setA.size || !setB.size) return 0;
+  let intersection = 0;
+  for (const item of setA) {
+    if (setB.has(item)) intersection += 1;
+  }
+  const union = setA.size + setB.size - intersection;
+  if (!union) return 0;
+  return intersection / union;
+};
+
+const overlapRatio = (subset, superset) => {
+  if (!subset.size || !superset.size) return 0;
+  let hits = 0;
+  for (const item of subset) {
+    if (superset.has(item)) hits += 1;
+  }
+  return hits / Math.max(1, subset.size);
+};
+
+const calculateEvidenceScore = (proposalText, categoryReferenceFiles) => {
+  const referenceText = categoryReferenceFiles.map((file) => file.content || "").join("\n");
+  const proposalTerms = tokenizeImportantTerms(proposalText, 1200);
+  const referenceTerms = tokenizeImportantTerms(referenceText, 1200);
+  const proposalNumbers = extractNumericTokens(proposalText);
+  const referenceNumbers = extractNumericTokens(referenceText);
+
+  const semanticOverlap = jaccardSimilarity(proposalTerms, referenceTerms);
+  const proposalCoverage = overlapRatio(proposalTerms, referenceTerms);
+  const numericOverlap = overlapRatio(proposalNumbers, referenceNumbers);
+
+  const score = Math.round(
+    Math.max(0, Math.min(100,
+      semanticOverlap * 55 +
+      proposalCoverage * 35 +
+      numericOverlap * 10
+    ))
+  );
+
+  return {
+    score,
+    semanticOverlap,
+    proposalCoverage,
+    numericOverlap,
+  };
+};
+
+const applyGroundingCaps = (modelScore, evidence) => {
+  if (evidence.semanticOverlap < 0.02 && evidence.proposalCoverage < 0.05 && evidence.numericOverlap === 0) {
+    return Math.min(modelScore, 5);
+  }
+  if (evidence.semanticOverlap < 0.04 && evidence.proposalCoverage < 0.09) {
+    return Math.min(modelScore, 15);
+  }
+  if (evidence.semanticOverlap < 0.07 && evidence.proposalCoverage < 0.14) {
+    return Math.min(modelScore, 30);
+  }
+  if (evidence.semanticOverlap < 0.1 && evidence.proposalCoverage < 0.2) {
+    return Math.min(modelScore, 45);
+  }
+  return Math.round((modelScore * 0.7) + (evidence.score * 0.3));
+};
+
 const buildReferencePrompt = (referenceFiles) => {
   if (!referenceFiles.length) {
     return "No reference documents were found in Supabase storage.";
@@ -108,20 +191,31 @@ const buildReferencePrompt = (referenceFiles) => {
     .join("\n\n---\n\n");
 };
 
-const normalizeValidationResult = (result, referenceFiles) => {
+const normalizeValidationResult = (result, referenceFiles, proposalText) => {
   const categories = Array.isArray(result?.categories) ? result.categories : [];
   const normalizedCategories = DEFAULT_CATEGORIES.map((category) => {
     const match = categories.find((item) => String(item?.key || "").toLowerCase() === category.key);
+    const categoryReferences = referenceFiles.filter((file) => file.category === category.key);
+    const evidence = calculateEvidenceScore(proposalText, categoryReferences);
+    const modelScore = Math.max(0, Math.min(100, Number(match?.score || 0)));
+    const groundedScore = applyGroundingCaps(modelScore, evidence);
+
     return {
       key: category.key,
       label: category.label,
-      score: Math.max(0, Math.min(100, Number(match?.score || 0))),
+      score: groundedScore,
       achieved: match?.achieved || "",
-      assessment: match?.assessment || "",
+      assessment: match?.assessment || (groundedScore <= 30 ? "Low alignment with reference content based on deterministic overlap checks." : ""),
       strengths: Array.isArray(match?.strengths) ? match.strengths.slice(0, 5) : [],
       issues: Array.isArray(match?.issues) ? match.issues.slice(0, 5) : [],
       recommendations: Array.isArray(match?.recommendations) ? match.recommendations.slice(0, 5) : [],
       referencesUsed: Array.isArray(match?.referencesUsed) ? match.referencesUsed.slice(0, 5) : referenceFiles.filter((file) => file.category === category.key).map((file) => file.name).slice(0, 5),
+      evidence: {
+        semanticOverlap: Number(evidence.semanticOverlap.toFixed(4)),
+        proposalCoverage: Number(evidence.proposalCoverage.toFixed(4)),
+        numericOverlap: Number(evidence.numericOverlap.toFixed(4)),
+        evidenceScore: evidence.score,
+      },
     };
   });
 
@@ -345,7 +439,7 @@ export const validateProposalUpload = async ({ fileName, mimeType, contentBase64
     throw new Error("ATHINA could not parse the validator output.");
   }
 
-  const result = normalizeValidationResult(parsed, referenceFiles);
+  const result = normalizeValidationResult(parsed, referenceFiles, proposalText);
   const reportId = await saveValidationReport({
     sessionId,
     userId,
