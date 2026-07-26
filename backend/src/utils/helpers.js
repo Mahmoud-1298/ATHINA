@@ -75,19 +75,92 @@ export const escapeHtml = (value = "") =>
 
 export const safeJsonParse = (text) => {
   if (!text || typeof text !== "string") return null;
-  // Try direct parse
-  try { return JSON.parse(text); } catch { /* continue */ }
-  // Try extracting from markdown code fence
-  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+
+  const tryParse = (candidate) => {
+    if (!candidate || typeof candidate !== "string") return null;
+    const cleaned = candidate
+      .replace(/^\uFEFF/, "")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/^[\s`]*json\s*/i, "")
+      .replace(/,\s*([}\]])/g, "$1")
+      .trim();
+
+    if (!cleaned) return null;
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      return null;
+    }
+  };
+
+  const findBalancedJsonChunk = (source) => {
+    const startIdx = source.search(/[\[{]/);
+    if (startIdx === -1) return null;
+
+    let inString = false;
+    let escaped = false;
+    const stack = [];
+
+    for (let i = startIdx; i < source.length; i += 1) {
+      const ch = source[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (ch === '"') inString = false;
+        continue;
+      }
+
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+
+      if (ch === "{" || ch === "[") {
+        stack.push(ch);
+        continue;
+      }
+
+      if (ch === "}" || ch === "]") {
+        const expected = ch === "}" ? "{" : "[";
+        if (stack[stack.length - 1] === expected) stack.pop();
+        if (stack.length === 0) return source.slice(startIdx, i + 1);
+      }
+    }
+
+    // Handle truncated model output by balancing close tokens.
+    if (stack.length > 0) {
+      let chunk = source.slice(startIdx).trim();
+      for (let i = stack.length - 1; i >= 0; i -= 1) {
+        chunk += stack[i] === "{" ? "}" : "]";
+      }
+      return chunk;
+    }
+
+    return null;
+  };
+
+  const direct = tryParse(text);
+  if (direct !== null) return direct;
+
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenceMatch) {
-    try { return JSON.parse(fenceMatch[1]); } catch { /* continue */ }
+    const fenced = tryParse(fenceMatch[1]);
+    if (fenced !== null) return fenced;
   }
-  // Try extracting JSON object from surrounding text
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start !== -1 && end !== -1 && end > start) {
-    try { return JSON.parse(text.slice(start, end + 1)); } catch { /* continue */ }
+
+  const balanced = findBalancedJsonChunk(text);
+  if (balanced) {
+    const fromBalanced = tryParse(balanced);
+    if (fromBalanced !== null) return fromBalanced;
   }
+
   return null;
 };
 

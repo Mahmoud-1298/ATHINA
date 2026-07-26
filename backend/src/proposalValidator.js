@@ -316,12 +316,15 @@ export const validateProposalUpload = async ({ fileName, mimeType, contentBase64
       content: [
         "You are ATHINA Proposal Validator.",
         "Return ONLY valid JSON.",
+        "Do not wrap output in markdown or code fences.",
         "Review the uploaded commercial proposal against the provided reference documents.",
         "Score each category from 0 to 100.",
         "Be strict, evidence-based, and specific.",
         "Categories: legal, finance, pricing, grammar, context, architecture.",
         "Output JSON with keys: summary, overallScore, decision, missingItems, categories.",
         "Each category object must contain: key, score, achieved, assessment, strengths, issues, recommendations, referencesUsed.",
+        "Keep output concise to avoid truncation: summary <= 120 words, missingItems <= 8, and for each category keep strengths/issues/recommendations/referencesUsed to max 3 short items.",
+        "The categories array must include exactly these 6 keys once each: legal, finance, pricing, grammar, context, architecture.",
       ].join("\n"),
     },
     {
@@ -336,7 +339,7 @@ export const validateProposalUpload = async ({ fileName, mimeType, contentBase64
     },
   ];
 
-  const llmResult = await callLLM({ messages, temperature: 0.1, maxTokens: 1800, jsonMode: true });
+  const llmResult = await callLLM({ messages, temperature: 0.1, maxTokens: 2400, jsonMode: true });
   const parsed = typeof llmResult === "string" ? safeJsonParse(llmResult) : llmResult;
   if (!parsed) {
     throw new Error("ATHINA could not parse the validator output.");
