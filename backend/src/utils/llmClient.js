@@ -1,10 +1,11 @@
 import { safeJsonParse } from "./helpers.js";
 
 const PRIMARY_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free";
-const FALLBACK_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
+const FALLBACK_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
 const DEFAULT_MODEL = PRIMARY_MODEL;
 const RESPONSE_CACHE = new Map();
 const CACHE_TTL_MS = Number(process.env.LLM_CACHE_TTL_MS) || 5 * 60 * 1000;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.Gemini_API_Key || "";
 
 const getCacheKey = ({ model, messages, temperature, maxTokens, jsonMode }) =>
   JSON.stringify({ model, messages, temperature, maxTokens, jsonMode });
@@ -21,6 +22,69 @@ const getCachedResponse = (key) => {
 
 const setCachedResponse = (key, value) => {
   RESPONSE_CACHE.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+};
+
+const buildGeminiPayload = (messages, temperature, maxTokens, jsonMode) => {
+  const systemText = messages
+    .filter((m) => m.role === "system")
+    .map((m) => String(m.content || ""))
+    .join("\n\n");
+
+  const conversationText = messages
+    .filter((m) => m.role !== "system")
+    .map((m) => {
+      const role = m.role === "assistant" ? "Assistant" : "User";
+      return role + ": " + String(m.content || "");
+    })
+    .join("\n\n");
+
+  const prompt = [
+    systemText,
+    jsonMode ? "CRITICAL: Return ONLY valid JSON. No markdown, no code fences, no extra text." : "",
+    conversationText,
+  ].filter(Boolean).join("\n\n");
+
+  return {
+    contents: [{
+      role: "user",
+      parts: [{ text: prompt }],
+    }],
+    generationConfig: {
+      temperature,
+      maxOutputTokens: maxTokens,
+      ...(jsonMode ? { responseMimeType: "application/json" } : {}),
+    },
+  };
+};
+
+const tryGeminiModel = async (model, messages, temperature, maxTokens, jsonMode) => {
+  if (!GEMINI_API_KEY) {
+    throw new Error("Missing GEMINI_API_KEY (or Gemini_API_Key) environment variable.");
+  }
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildGeminiPayload(messages, temperature, maxTokens, jsonMode)),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error("Gemini error " + response.status + ": " + errorText);
+  }
+
+  const data = await response.json();
+  const content = data?.candidates?.[0]?.content?.parts?.map((part) => part?.text || "").join("") || "";
+  if (!content) throw new Error("Empty response from Gemini model " + model);
+
+  if (jsonMode) {
+    const parsed = safeJsonParse(content);
+    if (!parsed) throw new Error("Failed to parse JSON from Gemini model " + model);
+    return parsed;
+  }
+
+  return content;
 };
 
 export const callOpenRouter = async (payload, maxRetries = 3) => {
@@ -101,7 +165,7 @@ export const callLLM = async ({ messages, model, temperature = 0.3, maxTokens = 
       const fallbackCacheKey = getCacheKey({ model: FALLBACK_MODEL, messages, temperature, maxTokens, jsonMode });
       const fallbackCached = getCachedResponse(fallbackCacheKey);
       if (fallbackCached !== null) return fallbackCached;
-      const result = await tryModel(FALLBACK_MODEL, messages, temperature, maxTokens, jsonMode);
+      const result = await tryGeminiModel(FALLBACK_MODEL, messages, temperature, maxTokens, jsonMode);
       setCachedResponse(fallbackCacheKey, result);
       return result;
     } catch (fallbackError) {
