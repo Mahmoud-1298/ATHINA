@@ -16,6 +16,7 @@ const DEFAULT_CATEGORIES = [
   { key: "context", label: "Context" },
   { key: "architecture", label: "Architecture" },
 ];
+const CORE_CATEGORY_KEYS = new Set(["legal", "finance", "pricing", "architecture", "context"]);
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const STOP_WORDS = new Set([
   "the", "and", "for", "with", "from", "that", "this", "are", "was", "were", "have", "has", "had", "will", "shall", "would", "should",
@@ -223,11 +224,42 @@ const normalizeValidationResult = (result, referenceFiles, proposalText) => {
     ? Math.round(normalizedCategories.reduce((sum, category) => sum + category.score, 0) / normalizedCategories.length)
     : 0;
 
+  const coreCategories = normalizedCategories.filter((category) => CORE_CATEGORY_KEYS.has(category.key));
+  const coreAverage = coreCategories.length
+    ? Math.round(coreCategories.reduce((sum, category) => sum + category.score, 0) / coreCategories.length)
+    : average;
+  const coreZeroCount = coreCategories.filter((category) => category.score <= 5).length;
+  const coreVeryLowEvidenceCount = coreCategories.filter((category) =>
+    (category.evidence?.semanticOverlap || 0) < 0.03 &&
+    (category.evidence?.proposalCoverage || 0) < 0.08 &&
+    (category.evidence?.numericOverlap || 0) === 0
+  ).length;
+  const strongMismatch = coreZeroCount >= 3 || coreVeryLowEvidenceCount >= 3;
+
+  const groundedOverall = strongMismatch
+    ? Math.min(average, coreAverage, 10)
+    : Math.round((average * 0.6) + (coreAverage * 0.4));
+
+  const decision = strongMismatch
+    ? "rejected_unrelated"
+    : (groundedOverall >= 80 ? "approved" : groundedOverall >= 60 ? "conditional" : "rework");
+
+  const summary = strongMismatch
+    ? "Proposal appears unrelated to reference requirements. Deterministic overlap checks show very low legal/finance/pricing/architecture/context alignment."
+    : (result?.summary || "Validation completed.");
+
+  const missingItems = Array.isArray(result?.missingItems) ? result.missingItems.slice(0, 8) : [];
+  if (strongMismatch) {
+    missingItems.unshift(
+      "Proposal does not match the referenced company requirements and should be rejected for this scope."
+    );
+  }
+
   return {
-    summary: result?.summary || "Validation completed.",
-    overallScore: Math.max(0, Math.min(100, Number(result?.overallScore || average))),
-    decision: result?.decision || (average >= 80 ? "approved" : average >= 60 ? "conditional" : "rework"),
-    missingItems: Array.isArray(result?.missingItems) ? result.missingItems.slice(0, 8) : [],
+    summary,
+    overallScore: Math.max(0, Math.min(100, groundedOverall)),
+    decision,
+    missingItems: missingItems.slice(0, 8),
     categories: normalizedCategories,
   };
 };
@@ -418,7 +450,7 @@ export const validateProposalUpload = async ({ fileName, mimeType, contentBase64
         "Output JSON with keys: summary, overallScore, decision, missingItems, categories.",
         "Each category object must contain: key, score, achieved, assessment, strengths, issues, recommendations, referencesUsed.",
         "Keep output concise to avoid truncation: summary <= 120 words, missingItems <= 8, and for each category keep strengths/issues/recommendations/referencesUsed to max 3 short items.",
-        "The categories array must include exactly these 6 keys once each: legal, finance, pricing, grammar, context, architecture.",
+        "The categories array must include exactly these 6 keys once each: requirements, legal, finance, pricing, grammar, context, architecture.",
       ].join("\n"),
     },
     {
