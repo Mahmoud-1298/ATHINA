@@ -142,7 +142,7 @@ const toPreviewHtml = (targetUrl, rawHtml) => {
 const synthesizeSpeech = async (text) => {
   const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
   const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || "lxYfHSkYm1EzQzGhdbfc";
-  const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || "eleven_v3";
+  const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5";
   if (!elevenLabsKey) {
     console.error("[TTS] ELEVENLABS_API_KEY is not set");
     return null;
@@ -605,6 +605,8 @@ app.post("/api/agent", async (req, res) => {
     const { message = "", sessionId = "default", userId = null, mode = "text", locationContext = null } = req.body;
     if (!message.trim()) return res.status(400).json({ error: "Missing message" });
     const result = await orchestrate({ message, sessionId, userId, mode, locationContext });
+    const shouldSynthesizeVoice = mode === "voice" && result.success && result.reply;
+    const audioBase64 = shouldSynthesizeVoice ? await synthesizeSpeech(result.reply) : null;
     await emitAudit({
       requestId: req.audit?.requestId || null,
       sessionId,
@@ -616,9 +618,10 @@ app.post("/api/agent", async (req, res) => {
         mode,
         tasksCount: Array.isArray(result.tasks) ? result.tasks.length : 0,
         actionsCount: Array.isArray(result.actions) ? result.actions.length : 0,
+        voiceReplyIncluded: Boolean(audioBase64),
       },
     });
-    res.json(result);
+    res.json({ ...result, audioBase64 });
   } catch (error) {
     console.error("/api/agent error:", error.message);
     await emitAudit({

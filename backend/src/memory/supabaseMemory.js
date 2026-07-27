@@ -17,6 +17,7 @@ export const getSupabaseClient = () => getSupabase();
 
 // In-memory fallback when Supabase is not configured
 const memoryFallback = new Map();
+const contextFallback = new Map();
 
 const normalizeScope = (userId, sessionId) => ({
   userId: userId ? String(userId) : null,
@@ -104,7 +105,10 @@ export const saveTaskResult = async (sessionId, taskId, tool, result, userId = n
 export const saveContext = async (sessionId, key, value, userId = null) => {
   const scope = normalizeScope(userId, sessionId);
   const sb = getSupabase();
-  if (!sb) return;
+  if (!sb) {
+    contextFallback.set(`${scope.userId || "session"}:${scope.sessionId}:${key}`, value);
+    return;
+  }
   await sb.from("athina_context").upsert([
     { session_id: scope.sessionId, user_id: scope.userId, key, value: JSON.stringify(value) },
   ], { onConflict: "session_id,key" });
@@ -113,7 +117,9 @@ export const saveContext = async (sessionId, key, value, userId = null) => {
 export const getContext = async (sessionId, key, userId = null) => {
   const scope = normalizeScope(userId, sessionId);
   const sb = getSupabase();
-  if (!sb) return null;
+  if (!sb) {
+    return contextFallback.get(`${scope.userId || "session"}:${scope.sessionId}:${key}`) ?? null;
+  }
   const query = sb
     .from("athina_context")
     .select("value")

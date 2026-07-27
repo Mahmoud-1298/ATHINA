@@ -4,10 +4,21 @@ import { getGoogleClients } from "../utils/googleWorkspace.js";
 // Generates an ICS calendar event and returns a data URL
 // Future: integrate with Google Calendar API / Outlook API
 
-const generateICS = ({ title, datetime, location, description }) => {
+const normalizeAttendees = (attendees) => {
+  if (Array.isArray(attendees)) {
+    return attendees.map((value) => String(value || "").trim()).filter(Boolean);
+  }
+  if (typeof attendees === "string") {
+    return attendees.split(/[;,]/).map((value) => value.trim()).filter(Boolean);
+  }
+  return [];
+};
+
+const generateICS = ({ title, datetime, location, description, attendees = [] }) => {
   const dt = new Date(datetime);
   const dtStart = dt.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
   const dtEnd = new Date(dt.getTime() + 60 * 60 * 1000).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const attendeeLines = normalizeAttendees(attendees).map((email) => `ATTENDEE;CN=${email}:MAILTO:${email}`);
 
   return [
     "BEGIN:VCALENDAR",
@@ -21,6 +32,7 @@ const generateICS = ({ title, datetime, location, description }) => {
     "SUMMARY:" + (title || "ATHINA Event"),
     location ? "LOCATION:" + location : "",
     description ? "DESCRIPTION:" + description : "",
+    ...attendeeLines,
     "END:VEVENT",
     "END:VCALENDAR",
   ].filter(Boolean).join("\r\n");
@@ -35,6 +47,7 @@ export const execute = async (params) => {
     end,
     location,
     description,
+    attendees,
     sessionId = "default",
     userId = null,
     timeMin,
@@ -43,6 +56,7 @@ export const execute = async (params) => {
   } = params;
 
   const normalizedAction = String(action || "create_event").toLowerCase();
+  const normalizedAttendees = normalizeAttendees(attendees);
 
   const getWindow = () => {
     const startAt = start || datetime;
@@ -125,12 +139,14 @@ export const execute = async (params) => {
 
       const created = await calendar.events.insert({
         calendarId: "primary",
+        sendUpdates: normalizedAttendees.length > 0 ? "all" : undefined,
         requestBody: {
           summary: title,
           location: location || undefined,
           description: description || undefined,
           start: { dateTime: new Date(startAt).toISOString() },
           end: { dateTime: new Date(endAt).toISOString() },
+          attendees: normalizedAttendees.length > 0 ? normalizedAttendees.map((email) => ({ email })) : undefined,
         },
       });
 
@@ -145,6 +161,7 @@ export const execute = async (params) => {
         title,
         start: startAt,
         end: endAt,
+        attendees: normalizedAttendees,
       };
     }
 
@@ -156,12 +173,14 @@ export const execute = async (params) => {
 
     const event = await calendar.events.insert({
       calendarId: "primary",
+      sendUpdates: normalizedAttendees.length > 0 ? "all" : undefined,
       requestBody: {
         summary: title,
         location: location || undefined,
         description: description || undefined,
         start: { dateTime: new Date(createStart).toISOString() },
         end: { dateTime: new Date(createEnd).toISOString() },
+        attendees: normalizedAttendees.length > 0 ? normalizedAttendees.map((email) => ({ email })) : undefined,
       },
     });
 
@@ -173,6 +192,7 @@ export const execute = async (params) => {
       start: createStart,
       end: createEnd,
       location,
+      attendees: normalizedAttendees,
       eventId: event.data.id,
       htmlLink: event.data.htmlLink,
     };
@@ -185,7 +205,7 @@ export const execute = async (params) => {
     return { success: false, error: "Missing required parameters: title, datetime/start" };
   }
 
-  const ics = generateICS({ title, datetime: fallbackStart, location, description });
+  const ics = generateICS({ title, datetime: fallbackStart, location, description, attendees: normalizedAttendees });
 
   // If Google Calendar is configured, create event via API
   const googleToken = process.env.GOOGLE_CALENDAR_TOKEN;
@@ -203,11 +223,12 @@ export const execute = async (params) => {
           description: description || undefined,
           start: { dateTime: fallbackStart },
           end: { dateTime: new Date(new Date(fallbackStart).getTime() + 60 * 60 * 1000).toISOString() },
+          attendees: normalizedAttendees.length > 0 ? normalizedAttendees.map((email) => ({ email })) : undefined,
         }),
       });
       if (res.ok) {
         const event = await res.json();
-        return { type: "calendar", success: true, title, datetime: fallbackStart, location, eventId: event.id, htmlLink: event.htmlLink };
+        return { type: "calendar", success: true, title, datetime: fallbackStart, location, attendees: normalizedAttendees, eventId: event.id, htmlLink: event.htmlLink };
       }
     } catch (e) {
       // Fall through to ICS
@@ -221,6 +242,7 @@ export const execute = async (params) => {
     datetime: fallbackStart,
     location,
     description,
+    attendees: normalizedAttendees,
     ics,
     icsUrl: "data:text/calendar;charset=utf8," + encodeURIComponent(ics),
   };
@@ -240,6 +262,7 @@ export const schema = {
     maxResults: "number (optional for list_events)",
     location: "string (optional) - event location",
     description: "string (optional) - event description",
+    attendees: "string[] | string (optional) - invitee email addresses",
     sessionId: "string (optional) - user session id for Google OAuth token lookup",
     userId: "string (optional) - user id for Google OAuth token lookup",
   },

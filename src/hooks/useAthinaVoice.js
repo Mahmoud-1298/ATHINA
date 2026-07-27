@@ -335,6 +335,7 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     stopListening: () => {},
     toggleWakeMode,
     playVoice: () => {},
+    playAudioBase64: playMp3Base64,
     stopVoice,
     speakText,
   };

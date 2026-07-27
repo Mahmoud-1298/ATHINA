@@ -36,6 +36,7 @@ export interface AgentResponse {
   actions: AgentAction[];
   sessionId: string;
   timestamp: string;
+  audioBase64?: string | null;
 }
 
 export interface MapLocationContext {

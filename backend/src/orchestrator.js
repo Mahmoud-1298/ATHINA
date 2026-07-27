@@ -26,6 +26,269 @@ const normalizeCacheText = (text) =>
     .trim()
     .slice(0, 500);
 
+const PENDING_MEETING_CONTEXT_KEY = "pending_meeting_request";
+const MONTH_INDEX = {
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11,
+};
+
+const extractEmails = (message) => {
+  const matches = String(message || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi);
+  return Array.from(new Set((matches || []).map((value) => value.trim().toLowerCase())));
+};
+
+const parseMonthDate = (message, existingStart = null) => {
+  const match = String(message || "").match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i);
+  if (!match) return existingStart ? new Date(existingStart) : null;
+
+  const month = MONTH_INDEX[match[1].toLowerCase()];
+  const day = Number(match[2]);
+  const current = new Date();
+  const inferredYear = match[3] ? Number(match[3]) : current.getFullYear();
+  const parsed = new Date(inferredYear, month, day, 9, 0, 0, 0);
+  if (!match[3] && parsed < current) {
+    parsed.setFullYear(parsed.getFullYear() + 1);
+  }
+  return parsed;
+};
+
+const parseRelativeDate = (message, existingStart = null) => {
+  const lower = String(message || "").toLowerCase();
+  if (!/\btomorrow\b/.test(lower)) {
+    return parseMonthDate(message, existingStart);
+  }
+
+  const base = existingStart ? new Date(existingStart) : new Date();
+  base.setDate(base.getDate() + 1);
+  base.setHours(9, 0, 0, 0);
+  return base;
+};
+
+const normalizeHour = (rawHour, meridiem) => {
+  let hour = Number(rawHour);
+  if (!Number.isFinite(hour)) return null;
+  const normalizedMeridiem = String(meridiem || "").toLowerCase();
+  if (normalizedMeridiem === "pm" && hour < 12) hour += 12;
+  if (normalizedMeridiem === "am" && hour === 12) hour = 0;
+  if (hour > 23 || hour < 0) return null;
+  return hour;
+};
+
+const parseTimeParts = (hourText, minuteText, meridiem) => {
+  const hour = normalizeHour(hourText, meridiem);
+  const minute = Number(minuteText || 0);
+  if (hour == null || minute > 59 || minute < 0) return null;
+  return { hour, minute };
+};
+
+const buildIsoFromDateAndTime = (dateValue, timeParts) => {
+  if (!dateValue || !timeParts) return null;
+  const resolved = new Date(dateValue);
+  resolved.setHours(timeParts.hour, timeParts.minute, 0, 0);
+  return resolved.toISOString();
+};
+
+const parseMeetingTimeWindow = (message, existingStart = null, existingEnd = null) => {
+  const text = String(message || "");
+  const baseDate = parseRelativeDate(text, existingStart) || (existingStart ? new Date(existingStart) : null);
+
+  const rangeMatch = text.match(/\b(?:between|from)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+  if (rangeMatch) {
+    const startParts = parseTimeParts(rangeMatch[1], rangeMatch[2], rangeMatch[3]);
+    const endParts = parseTimeParts(rangeMatch[4], rangeMatch[5], rangeMatch[6] || rangeMatch[3]);
+    return {
+      start: buildIsoFromDateAndTime(baseDate, startParts),
+      end: buildIsoFromDateAndTime(baseDate, endParts),
+    };
+  }
+
+  const exactTimeMatch = text.match(/^\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*$/i)
+    || text.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i)
+    || text.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i)
+    || text.match(/\b(\d{1,2})\s*(am|pm)\b/i);
+
+  if (!exactTimeMatch) {
+    return {
+      start: existingStart,
+      end: existingEnd,
+    };
+  }
+
+  const startParts = parseTimeParts(exactTimeMatch[1], exactTimeMatch[2], exactTimeMatch[3]);
+  const startIso = buildIsoFromDateAndTime(baseDate, startParts);
+  if (!startIso) {
+    return { start: existingStart, end: existingEnd };
+  }
+
+  const endIso = existingEnd && existingStart && new Date(existingStart).toDateString() === new Date(startIso).toDateString()
+    ? new Date(new Date(startIso).getTime() + (new Date(existingEnd).getTime() - new Date(existingStart).getTime())).toISOString()
+    : new Date(new Date(startIso).getTime() + 60 * 60 * 1000).toISOString();
+
+  return { start: startIso, end: endIso };
+};
+
+const parseMeetingTitle = (message, existingTitle = "") => {
+  const text = String(message || "").trim();
+  const titleMatch = text.match(/(?:^|\b)title\s*[:=-]\s*["']?([^"'\n]+)["']?\s*$/i);
+  if (titleMatch) return titleMatch[1].trim();
+
+  const calledMatch = text.match(/\b(?:called|named)\s+["']?([^"'\n]+)["']?\s*$/i);
+  if (calledMatch) return calledMatch[1].trim();
+
+  return existingTitle || "";
+};
+
+const hasMeetingIntent = (message) => /\b(meeting|calendar|invite|event|schedule|scheduled|book|appointment|remind)\b/i.test(String(message || ""));
+const hasSchedulingVerb = (message) => /\b(add|create|set up|setup|schedule|book|send)\b/i.test(String(message || ""));
+const isReferenceToPriorDetails = (message) => /\b(already said|above|previous|same|that one|use that|as said)\b/i.test(String(message || ""));
+const isCancellation = (message) => /\b(cancel|never mind|forget it|stop)\b/i.test(String(message || ""));
+
+const mergeMeetingState = (current, update) => ({
+  type: "meeting",
+  title: update.title || current?.title || "",
+  attendees: Array.from(new Set([...(current?.attendees || []), ...(update.attendees || [])])),
+  start: update.start || current?.start || null,
+  end: update.end || current?.end || null,
+  location: update.location || current?.location || "",
+  description: update.description || current?.description || "",
+  explicitCreate: Boolean(update.explicitCreate || current?.explicitCreate),
+  updatedAt: new Date().toISOString(),
+});
+
+const summarizeMeetingState = (meeting) => {
+  if (!meeting) return "";
+  const parts = [];
+  if (meeting.title) parts.push(`title \"${meeting.title}\"`);
+  if (meeting.start) {
+    const start = new Date(meeting.start);
+    const end = meeting.end ? new Date(meeting.end) : null;
+    const dateText = start.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+    const timeText = start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const endText = end ? end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
+    parts.push(endText ? `${dateText} from ${timeText} to ${endText}` : `${dateText} at ${timeText}`);
+  }
+  if (meeting.attendees?.length) parts.push(`invitees ${meeting.attendees.join(", ")}`);
+  return parts.join(", ");
+};
+
+const getMissingMeetingFields = (meeting) => {
+  const missing = [];
+  if (!meeting?.title) missing.push("title");
+  if (!meeting?.start) missing.push("date_time");
+  return missing;
+};
+
+const buildMeetingClarificationReply = (meeting, missing) => {
+  const known = summarizeMeetingState(meeting);
+  const prefix = known ? `I have the meeting details so far: ${known}. ` : "";
+  if (missing.includes("title") && missing.includes("date_time")) {
+    return `${prefix}What title should I use, and what exact date and time should I schedule it for?`;
+  }
+  if (missing.includes("title")) {
+    return `${prefix}What title should I use for the meeting?`;
+  }
+  if (missing.includes("date_time")) {
+    return `${prefix}What exact date and time should I schedule it for?`;
+  }
+  return `${prefix}Please confirm the remaining meeting details.`;
+};
+
+const replyForCreatedMeeting = (result, meeting) => {
+  const inviteNote = meeting.attendees?.length ? ` and sent the invite to ${meeting.attendees.join(", ")}` : "";
+  if (result.htmlLink) {
+    return `Your meeting \"${meeting.title}\" is on the calendar${inviteNote}.`;
+  }
+  return `I prepared the calendar event for \"${meeting.title}\"${inviteNote}, but direct calendar sync is not configured.`;
+};
+
+const interpretMeetingMessage = ({ message, pendingMeeting }) => {
+  const relevant = hasMeetingIntent(message)
+    || Boolean(pendingMeeting)
+    || extractEmails(message).length > 0
+    || Boolean(parseMeetingTitle(message))
+    || /^\s*(\d{1,2})(?::\d{2})?\s*(am|pm)?\s*$/i.test(String(message || ""))
+    || isReferenceToPriorDetails(message);
+
+  if (!relevant) return null;
+
+  const timeWindow = parseMeetingTimeWindow(message, pendingMeeting?.start, pendingMeeting?.end);
+  return mergeMeetingState(pendingMeeting, {
+    title: parseMeetingTitle(message, pendingMeeting?.title),
+    attendees: extractEmails(message),
+    start: timeWindow.start,
+    end: timeWindow.end,
+    explicitCreate: hasSchedulingVerb(message),
+  });
+};
+
+const handlePendingMeetingWorkflow = async ({ message, sessionId, userId }) => {
+  const pendingMeeting = await getContext(sessionId, PENDING_MEETING_CONTEXT_KEY, userId);
+  if (!pendingMeeting && !hasMeetingIntent(message) && !extractEmails(message).length && !isReferenceToPriorDetails(message)) {
+    return null;
+  }
+
+  if (pendingMeeting && isCancellation(message)) {
+    await saveContext(sessionId, PENDING_MEETING_CONTEXT_KEY, null, userId);
+    return { success: true, reply: "I cancelled the pending meeting request.", actions: [] };
+  }
+
+  const meeting = interpretMeetingMessage({ message, pendingMeeting });
+  if (!meeting) return null;
+
+  const missing = getMissingMeetingFields(meeting);
+  if (missing.length > 0 || (!meeting.explicitCreate && pendingMeeting == null)) {
+    await saveContext(sessionId, PENDING_MEETING_CONTEXT_KEY, meeting, userId);
+    if (!meeting.explicitCreate && pendingMeeting == null) {
+      return {
+        success: true,
+        reply: buildMeetingClarificationReply(meeting, missing.length > 0 ? missing : ["date_time"]),
+        actions: [],
+      };
+    }
+    return {
+      success: true,
+      reply: buildMeetingClarificationReply(meeting, missing),
+      actions: [],
+    };
+  }
+
+  const calendarResult = await executeTool("calendar", {
+    action: "create_event",
+    title: meeting.title,
+    start: meeting.start,
+    end: meeting.end,
+    location: meeting.location,
+    description: meeting.description,
+    attendees: meeting.attendees,
+  }, { sessionId, userId });
+
+  if (!calendarResult.success) {
+    await saveContext(sessionId, PENDING_MEETING_CONTEXT_KEY, meeting, userId);
+    return {
+      success: false,
+      reply: "I could not create the calendar event: " + (calendarResult.error || "unknown error"),
+      actions: [],
+    };
+  }
+
+  await saveContext(sessionId, PENDING_MEETING_CONTEXT_KEY, null, userId);
+  return {
+    success: true,
+    reply: replyForCreatedMeeting(calendarResult, meeting),
+    actions: [],
+  };
+};
+
 const buildLocationContext = async (sessionId, locationContext, userId) => {
   const fallbackContext = locationContext || (await getContext(sessionId, "map_context", userId));
   if (!fallbackContext || typeof fallbackContext.lat !== "number" || typeof fallbackContext.lng !== "number") return "";
@@ -228,6 +491,20 @@ export const orchestrate = async ({ message, sessionId = "default", userId = nul
   if (locationContext && typeof locationContext.lat === "number" && typeof locationContext.lng === "number") {
     await saveContext(sessionId, "map_context", locationContext, userId);
   }
+
+  const pendingMeetingResult = await handlePendingMeetingWorkflow({ message, sessionId, userId });
+  if (pendingMeetingResult) {
+    await saveTurn(sessionId, message, pendingMeetingResult.reply, userId);
+    return {
+      success: Boolean(pendingMeetingResult.success),
+      reply: pendingMeetingResult.reply,
+      actions: pendingMeetingResult.actions || [],
+      sessionId,
+      timestamp: new Date().toISOString(),
+      directAction: true,
+    };
+  }
+
   const quickReply = getQuickReply(message);
   const locationNote = await buildLocationContext(sessionId, locationContext, userId);
   const requestKey = buildRequestKey(message, locationNote);
@@ -273,7 +550,7 @@ export const orchestrate = async ({ message, sessionId = "default", userId = nul
     };
   }
 
-  const history = await getHistory(sessionId, 4, userId);
+  const history = await getHistory(sessionId, 8, userId);
   const relevantMemories = await loadRelevantMemories({ message, locationNote, userId, sessionId });
   const memoryNote = buildMemoryNote(relevantMemories);
   const planResult = await plan({ message, history, locationNote, memoryNote });

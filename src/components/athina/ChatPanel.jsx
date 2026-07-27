@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { invokeFunction } from '@/lib/functionApi';
+import { getClientIdentity } from '@/lib/clientIdentity';
+import { sendAgentMessage } from '@/lib/athinaApi.ts';
 import { Send, Loader2, Bot, User, MapPin, Search, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 
 export default function ChatPanel({ onLocate }) {
@@ -22,8 +23,8 @@ export default function ChatPanel({ onLocate }) {
     setInput('');
     setLoading(true);
     try {
-      const res = await invokeFunction('athinaAgent', { message: currentInput });
-      const data = res.data;
+      const identity = getClientIdentity();
+      const data = await sendAgentMessage(currentInput, identity.sessionId, 'text');
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply, actions: data.actions || [] }]);
       const locateAction = (data.actions || []).find((a) => a.type === 'locate' && a.success);
       if (locateAction && onLocate) {

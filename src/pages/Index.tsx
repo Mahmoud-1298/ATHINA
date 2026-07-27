@@ -11,6 +11,7 @@ import remarkGfm from "remark-gfm";
 import {
   AgentAction,
   AgentBrowseAction,
+  AgentResponse,
   BACKEND_BASE_URL,
   MapLocationContext,
   loadConversationHistory,
@@ -213,7 +214,7 @@ const Index = () => {
         const result = await sendAgentMessage(text, SESSION_ID, mode, selectedMapLocation);
         addMessage("agent", result.reply);
         applyActions(result.actions || []);
-        return result.reply;
+        return result;
       } catch (error) {
         console.error("Agent backend error:", error);
         const message = error instanceof Error
@@ -222,7 +223,14 @@ const Index = () => {
             : error.message
           : "ATHINA backend failed. Please try again.";
         addMessage("agent", message);
-        return message;
+        return {
+          success: false,
+          reply: message,
+          actions: [],
+          sessionId: SESSION_ID,
+          timestamp: new Date().toISOString(),
+          audioBase64: null,
+        } satisfies AgentResponse;
       } finally {
         setIsProcessing(false);
       }
@@ -230,12 +238,12 @@ const Index = () => {
     [addMessage, applyActions, selectedMapLocation]
   );
 
-  const speakReply = useCallback(async (text: string) => {
+  const speakReply = useCallback(async (text: string, audioBase64: string | null = null) => {
     try {
       stopRecognition();
-      const data = await speakText(text);
-      if (data.audioBase64 && audioRef.current) {
-        audioRef.current.src = `data:audio/mpeg;base64,${data.audioBase64}`;
+      const resolvedAudio = audioBase64 || (await speakText(text)).audioBase64;
+      if (resolvedAudio && audioRef.current) {
+        audioRef.current.src = `data:audio/mpeg;base64,${resolvedAudio}`;
         setIsSpeaking(true);
         isSpeakingRef.current = true;
         await audioRef.current.play();
@@ -315,8 +323,8 @@ const Index = () => {
         setIsProcessing(true);
         setVoiceStatus("processing");
 
-        const reply = await runAgent(transcript, "voice");
-        await speakReply(reply);
+        const result = await runAgent(transcript, "voice");
+        await speakReply(result.reply, result.audioBase64 || null);
       };
 
       recognition.onerror = () => {
