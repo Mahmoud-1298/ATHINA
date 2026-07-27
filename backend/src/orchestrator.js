@@ -91,6 +91,15 @@ const parseTimeParts = (hourText, minuteText, meridiem) => {
   return { hour, minute };
 };
 
+const looksLikeTitleOnlyReply = (message) => {
+  const text = String(message || "").trim();
+  if (!text) return false;
+  if (/[@]|\b(am|pm|tomorrow|today|january|february|march|april|may|june|july|august|september|october|november|december|calendar|meeting|invite|schedule|title)\b/i.test(text)) {
+    return false;
+  }
+  return /^[\p{L}\p{N}][\p{L}\p{N}\s()'&+_.-]{1,120}$/u.test(text);
+};
+
 const buildIsoFromDateAndTime = (dateValue, timeParts) => {
   if (!dateValue || !timeParts) return null;
   const resolved = new Date(dateValue);
@@ -102,7 +111,7 @@ const parseMeetingTimeWindow = (message, existingStart = null, existingEnd = nul
   const text = String(message || "");
   const baseDate = parseRelativeDate(text, existingStart) || (existingStart ? new Date(existingStart) : null);
 
-  const rangeMatch = text.match(/\b(?:between|from)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+  const rangeMatch = text.match(/\b(?:(?:between|from)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
   if (rangeMatch) {
     const startParts = parseTimeParts(rangeMatch[1], rangeMatch[2], rangeMatch[3]);
     const endParts = parseTimeParts(rangeMatch[4], rangeMatch[5], rangeMatch[6] || rangeMatch[3]);
@@ -142,8 +151,16 @@ const parseMeetingTitle = (message, existingTitle = "") => {
   const titleMatch = text.match(/(?:^|\b)title\s*[:=-]\s*["']?([^"'\n]+)["']?\s*$/i);
   if (titleMatch) return titleMatch[1].trim();
 
+  const titleCommandMatch = text.match(/(?:make|set|use)?\s*the\s*title\s*(?:to|as|is)?\s*[(:-]*\s*["']?([^"'\n)]+)["']?\s*\)?\s*$/i);
+  if (titleCommandMatch) return titleCommandMatch[1].trim();
+
   const calledMatch = text.match(/\b(?:called|named)\s+["']?([^"'\n]+)["']?\s*$/i);
   if (calledMatch) return calledMatch[1].trim();
+
+  const wrappedTitleMatch = text.match(/^["'([]\s*([^"'()\[\]\n][^\n]*?)\s*["')]$/);
+  if (wrappedTitleMatch) return wrappedTitleMatch[1].trim();
+
+  if (!existingTitle && looksLikeTitleOnlyReply(text)) return text;
 
   return existingTitle || "";
 };
@@ -215,7 +232,7 @@ const interpretMeetingMessage = ({ message, pendingMeeting }) => {
   const relevant = hasMeetingIntent(message)
     || Boolean(pendingMeeting)
     || extractEmails(message).length > 0
-    || Boolean(parseMeetingTitle(message))
+    || Boolean(parseMeetingTitle(message, ""))
     || /^\s*(\d{1,2})(?::\d{2})?\s*(am|pm)?\s*$/i.test(String(message || ""))
     || isReferenceToPriorDetails(message);
 
