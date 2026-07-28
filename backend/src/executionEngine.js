@@ -440,4 +440,322 @@ export const execute = async (
     );
   }
 
-  const results
+  const results = {};
+  const executed = [];
+  const taskStatus = {};
+  const completedTaskIds =
+    new Set();
+
+  for (const task of tasks) {
+    const taskStartedAt = Date.now();
+
+    console.log(
+      "[ATHINA][EXECUTION] Starting task:",
+      {
+        sessionId,
+        userId,
+        taskId: task.id,
+        tool: task.tool,
+        description:
+          task.description,
+        dependsOn:
+          task.depends_on || [],
+      }
+    );
+
+    /* -------------------------------------------------------
+       1. BASIC TASK VALIDATION
+       ------------------------------------------------------- */
+
+    if (!task?.id || !task?.tool) {
+      const result =
+        createFailureResult({
+          task: task || {
+            id: "unknown",
+            tool: "unknown",
+          },
+          code: "INVALID_TASK",
+          error:
+            "Task requires both an id and a tool.",
+          durationMs:
+            Date.now() -
+            taskStartedAt,
+        });
+
+      results[task?.id || "unknown"] =
+        result;
+
+      executed.push({
+        ...task,
+        result,
+      });
+
+      taskStatus[
+        task?.id || "unknown"
+      ] = "failed";
+
+      await persistTaskResult({
+        saveTaskResult,
+        sessionId,
+        task:
+          task || {
+            id: "unknown",
+            tool: "unknown",
+          },
+        result,
+      });
+
+      continue;
+    }
+
+    /* -------------------------------------------------------
+       2. DEPENDENCY ENFORCEMENT
+       ------------------------------------------------------- */
+
+    const dependencyValidation =
+      validateTaskDependencies(
+        task,
+        completedTaskIds,
+        taskStatus
+      );
+
+    if (
+      !dependencyValidation.valid
+    ) {
+      const result =
+        createSkippedResult({
+          task,
+          reason:
+            dependencyValidation.reason,
+        });
+
+      results[task.id] = result;
+      taskStatus[task.id] =
+        "skipped";
+      completedTaskIds.add(
+        task.id
+      );
+
+      executed.push({
+        ...task,
+        params: task.params || {},
+        result,
+      });
+
+      await persistTaskResult({
+        saveTaskResult,
+        sessionId,
+        task,
+        result,
+      });
+
+      console.warn(
+        "[ATHINA][EXECUTION] Task skipped:",
+        {
+          taskId: task.id,
+          reason:
+            dependencyValidation.reason,
+        }
+      );
+
+      continue;
+    }
+
+    /* -------------------------------------------------------
+       3. PARAMETER RESOLUTION
+       ------------------------------------------------------- */
+
+    const {
+      resolved: resolvedParams,
+      unresolved,
+    } = resolveParams(
+      task.params || {},
+      results
+    );
+
+    if (unresolved.length > 0) {
+      const result =
+        createFailureResult({
+          task,
+          code:
+            "UNRESOLVED_REFERENCE",
+          error:
+            "One or more task-result references could not be resolved.",
+          details: unresolved,
+          durationMs:
+            Date.now() -
+            taskStartedAt,
+        });
+
+      results[task.id] = result;
+      taskStatus[task.id] =
+        "failed";
+      completedTaskIds.add(
+        task.id
+      );
+
+      executed.push({
+        ...task,
+        params: resolvedParams,
+        result,
+      });
+
+      await persistTaskResult({
+        saveTaskResult,
+        sessionId,
+        task,
+        result,
+      });
+
+      console.error(
+        "[ATHINA][EXECUTION] Unresolved task references:",
+        {
+          taskId: task.id,
+          unresolved,
+        }
+      );
+
+      continue;
+    }
+
+    /* -------------------------------------------------------
+       4. TOOL EXECUTION
+       ------------------------------------------------------- */
+
+    let normalizedResult;
+
+    try {
+      const rawResult =
+        await executeTool(
+          task.tool,
+          resolvedParams,
+          {
+            sessionId,
+            userId,
+            taskId: task.id,
+          }
+        );
+
+      normalizedResult =
+        normalizeToolResult(
+          task,
+          rawResult,
+          Date.now() -
+            taskStartedAt
+        );
+    } catch (error) {
+      normalizedResult =
+        createFailureResult({
+          task,
+          code:
+            "TOOL_EXECUTION_ERROR",
+          error:
+            error?.message ||
+            "The tool execution failed.",
+          details:
+            process.env.NODE_ENV ===
+            "development"
+              ? {
+                  stack:
+                    error?.stack ||
+                    null,
+                }
+              : null,
+          durationMs:
+            Date.now() -
+            taskStartedAt,
+        });
+    }
+
+    /* -------------------------------------------------------
+       5. RECORD RESULT
+       ------------------------------------------------------- */
+
+    results[task.id] =
+      normalizedResult;
+
+    taskStatus[task.id] =
+      normalizedResult.success
+        ? "success"
+        : "failed";
+
+    completedTaskIds.add(task.id);
+
+    const executedTask = {
+      ...task,
+      params: resolvedParams,
+      result: normalizedResult,
+    };
+
+    executed.push(executedTask);
+
+    await persistTaskResult({
+      saveTaskResult,
+      sessionId,
+      task,
+      result: normalizedResult,
+    });
+
+    console.log(
+      "[ATHINA][EXECUTION] Task completed:",
+      {
+        taskId: task.id,
+        tool: task.tool,
+        success:
+          normalizedResult.success,
+        durationMs:
+          normalizedResult.durationMs,
+        error:
+          normalizedResult.success
+            ? null
+            : normalizedResult.error,
+      }
+    );
+  }
+
+  const successfulTasks =
+    executed.filter(
+      (task) =>
+        task.result?.success === true
+    ).length;
+
+  const failedTasks =
+    executed.filter(
+      (task) =>
+        task.result?.success ===
+          false &&
+        !task.result?.skipped
+    ).length;
+
+  const skippedTasks =
+    executed.filter(
+      (task) =>
+        task.result?.skipped ===
+        true
+    ).length;
+
+  const summary = {
+    totalTasks: executed.length,
+    successfulTasks,
+    failedTasks,
+    skippedTasks,
+    success:
+      executed.length > 0 &&
+      failedTasks === 0 &&
+      skippedTasks === 0,
+  };
+
+  console.log(
+    "[ATHINA][EXECUTION] Plan completed:",
+    {
+      sessionId,
+      ...summary,
+    }
+  );
+
+  return {
+    results,
+    executed,
+    summary,
+  };
+};
