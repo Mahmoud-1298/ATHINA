@@ -767,9 +767,121 @@ const chatCompletionsHandler = async (req, res) => {
   }
 };
 
+
+/*
+ * OpenAI-compatible endpoints.
+ * Keep these for ElevenLabs or clients that require the
+ * OpenAI chat-completions format.
+ */
 app.post("/v1/chat/completions", chatCompletionsHandler);
 app.post("/chat/completions", chatCompletionsHandler);
-app.post("/api/chat", chatCompletionsHandler);
+
+/*
+ * ATHINA agentic text endpoint.
+ * This routes text through the orchestrator, planner,
+ * rule engine, execution engine, tools, and memory.
+ */
+app.post("/api/chat", async (*eq, res) => {
+  const requestId =
+*   req.audit?.requestId || crypto.*andomUUID();
+
+  try {
+    const {
+*     message = "",
+      sessionId*= "default",
+      userId = null,
+*     locationContext = null,
+    }*= req.body || {};
+
+    const norma*izedMessage = String(message).trim*);
+
+    if (!normalizedMessage) {
+*     return res.status(400).json({*        success: false,
+        er*or: "Missing message",
+        rep*y: "Please enter a request.",
+    *   actions: [],
+        sessionId,*        requestId,
+      });
+    }*
+    console.log("[ATHINA][/api/chat] Agent request received:", {
+   *  requestId,
+      sessionId,
+    * userId,
+      messageLength: norm*lizedMessage.length,
+    });
+
+    *onst result = await orchestrate({
+*     message: normalizedMessage,
+ *    sessionId,
+      userId,
+     *mode: "text",
+      locationContex*,
+    });
+
+    await emitAudit({
+ *    requestId,
+      sessionId,
+  *   actorId: userId,
+      endpoint* req.originalUrl,
+      eventType:*"agent.chat.result",
+      status:*result.success ? "success" : "erro*",
+      metadata: {
+        tasksCount: Array.isArray(result.tasks)
+          ? result.tasks.length
+          : 0,
+        actionsCount: Array.isArray(result.actions)
+          ? result.actions.length
+          : 0,
+        directAction: Boolean(result.directAction),
+        quickReply: Boolean(result.quickReply),
+        cachedReply: Boolean(result.cachedReply),
+        workflowCleared: Boolean(result.workflowCleared),
+        planningFailed: Boolean(result.planningFailed),
+      },
+    });
+
+    /*
+     * Return a completed agent result as JSON.
+     * result.success indicates whether the requested operation
+     * itself succeeded.
+     */
+    return res.status(200).*son({
+      ...result,
+      reque*tId,
+    });
+  } catch (error) {
+ *  console.error("[ATHINA][/api/chat] Orchestrator error:", {
+      re*uestId,
+      message: error?.mess*ge || "Unknown error",
+      stack*
+        process.env.NODE_ENV === *development"
+          ? error?.st*ck
+          : undefined,
+    });
+*    await emitAudit({
+      reques*Id,
+      endpoint: req.originalUr*,
+      eventType: "agent.chat.err*r",
+      status: "error",
+      m*tadata: {
+        error: clip(
+   *      redactText(error?.message ||*"unknown"),
+          300
+        *,
+      },
+    });
+
+    return res*status(500).json({
+      success: *alse,
+      error: "Chat processin* failed",
+      details: error?.me*sage || "Unknown backend error",
+      reply:
+        "I couldn't complete that request because the backend encountered an error.",
+      actions: [],
+      requestId,
+    });
+  }
+});
 
 // Voice endpoint
 app.post("/api/voice", async (req, res) => {
