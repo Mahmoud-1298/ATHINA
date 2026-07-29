@@ -781,50 +781,50 @@ app.post("/chat/completions", chatCompletionsHandler);
  * This routes text through the orchestrator, planner,
  * rule engine, execution engine, tools, and memory.
  */
-app.post("/api/chat", async (*eq, res) => {
+app.post("/api/chat", async (req, res) => {
   const requestId =
-*   req.audit?.requestId || crypto.*andomUUID();
+   req.audit?.requestId || crypto. andomUUID();
 
   try {
     const {
-*     message = "",
+      message = "",
       sessionId*= "default",
       userId = null,
-*     locationContext = null,
-    }*= req.body || {};
+      locationContext = null,
+    }= req.body || {};
 
-    const norma*izedMessage = String(message).trim*);
+    const normalizedMessage = String(message).trim);
 
     if (!normalizedMessage) {
-*     return res.status(400).json({*        success: false,
-        er*or: "Missing message",
-        rep*y: "Please enter a request.",
-    *   actions: [],
-        sessionId,*        requestId,
+     return res.status(400).json({        success: false,
+        error: "Missing message",
+        reply: "Please enter a request.",
+        actions: [],
+        sessionId,        requestId,
       });
-    }*
+    }
     console.log("[ATHINA][/api/chat] Agent request received:", {
-   *  requestId,
+      requestId,
       sessionId,
-    * userId,
-      messageLength: norm*lizedMessage.length,
+      userId,
+      messageLength: normalizedMessage.length,
     });
 
-    *onst result = await orchestrate({
-*     message: normalizedMessage,
- *    sessionId,
+    onst result = await orchestrate({
+      message: normalizedMessage,
+      sessionId,
       userId,
-     *mode: "text",
-      locationContex*,
+      mode: "text",
+      locationContex,
     });
 
     await emitAudit({
- *    requestId,
+      requestId,
       sessionId,
-  *   actorId: userId,
-      endpoint* req.originalUrl,
-      eventType:*"agent.chat.result",
-      status:*result.success ? "success" : "erro*",
+      actorId: userId,
+      endpoint: req.originalUrl,
+      eventType:"agent.chat.result",
+      status: result.success ? "success" : "erro*",
       metadata: {
         tasksCount: Array.isArray(result.tasks)
           ? result.tasks.length
@@ -847,33 +847,33 @@ app.post("/api/chat", async (*eq, res) => {
      */
     return res.status(200).*son({
       ...result,
-      reque*tId,
+      requestId,
     });
   } catch (error) {
- *  console.error("[ATHINA][/api/chat] Orchestrator error:", {
-      re*uestId,
-      message: error?.mess*ge || "Unknown error",
-      stack*
+    console.error("[ATHINA][/api/chat] Orchestrator error:", {
+      requestId,
+      message: error?.message || "Unknown error",
+      stack
         process.env.NODE_ENV === *development"
-          ? error?.st*ck
+          ? error?.stack
           : undefined,
     });
-*    await emitAudit({
-      reques*Id,
-      endpoint: req.originalUr*,
+     await emitAudit({
+      requestId,
+      endpoint: req.originalUr,
       eventType: "agent.chat.err*r",
       status: "error",
-      m*tadata: {
+      metadata: {
         error: clip(
-   *      redactText(error?.message ||*"unknown"),
+          redactText(error?.message || "unknown"),
           300
-        *,
+        ,
       },
     });
 
     return res*status(500).json({
       success: *alse,
-      error: "Chat processin* failed",
+      error: "Chat processing failed",
       details: error?.me*sage || "Unknown backend error",
       reply:
         "I couldn't complete that request because the backend encountered an error.",
