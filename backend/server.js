@@ -3,23 +3,61 @@ import cors from "cors";
 import dotenv from "dotenv";
 import crypto from "crypto";
 import { orchestrate } from "./src/orchestrator.js";
-import { getProposalValidatorContext, getProposalValidatorDebug, validateProposalUpload } from "./src/proposalValidator.js";
+import {
+  getProposalValidatorContext,
+  getProposalValidatorDebug,
+  validateProposalUpload,
+} from "./src/proposalValidator.js";
 import { callOpenRouter, DEFAULT_MODEL } from "./src/utils/llmClient.js";
-import { getHistory, saveTurn, saveAuditLog } from "./src/memory/supabaseMemory.js";
-import { fetchWithTimeout, normalizeUrl, escapeHtml } from "./src/utils/helpers.js";
-import { buildGoogleConnectUrl, exchangeGoogleCode, getGoogleAuthStatus, getGoogleOAuthInfo } from "./src/utils/googleWorkspace.js";
+import {
+  getHistory,
+  saveTurn,
+  saveAuditLog,
+} from "./src/memory/supabaseMemory.js";
+import {
+  fetchWithTimeout,
+  normalizeUrl,
+  escapeHtml,
+} from "./src/utils/helpers.js";
+import {
+  buildGoogleConnectUrl,
+  exchangeGoogleCode,
+  getGoogleAuthStatus,
+} from "./src/utils/googleWorkspace.js";
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT || 3000);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "*";
 
-app.use(cors({
-  origin: FRONTEND_ORIGIN === "*" ? true : FRONTEND_ORIGIN.split(","),
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
-}));
+const allowedOrigins =
+  FRONTEND_ORIGIN === "*"
+    ? []
+    : FRONTEND_ORIGIN.split(",")
+        .map((origin) => origin.trim().replace(/\/$/, ""))
+        .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || FRONTEND_ORIGIN === "*") {
+        return callback(null, true);
+      }
+
+      const normalizedOrigin = origin.replace(/\/$/, "");
+      if (allowedOrigins.includes(normalizedOrigin)) {
+        return callback(null, true);
+      }
+
+      console.warn("[CORS] Blocked origin:", normalizedOrigin);
+      return callback(new Error(`CORS origin not allowed: ${normalizedOrigin}`));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
+  })
+);
+
 app.use(express.json({ limit: "25mb" }));
 
 const AUDIT_LOGS_ENABLED = process.env.AUDIT_LOGS_ENABLED !== "false";
@@ -27,35 +65,39 @@ const AUDIT_SUPABASE_ENABLED = process.env.AUDIT_SUPABASE_ENABLED !== "false";
 
 const clip = (value, max = 180) => {
   const text = String(value || "");
-  if (text.length <= max) return text;
-  return text.slice(0, max) + "...";
+  return text.length <= max ? text : `${text.slice(0, max)}...`;
 };
 
-const redactText = (input) => {
-  const text = String(input || "");
-  return text
+const redactText = (input) =>
+  String(input || "")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted-token]")
     .replace(/\b(sk|or|sb)_[A-Za-z0-9_-]{8,}\b/g, "[redacted-secret]");
-};
 
-const hashText = (input) => crypto.createHash("sha256").update(String(input || "")).digest("hex").slice(0, 16);
+const hashText = (input) =>
+  crypto
+    .createHash("sha256")
+    .update(String(input || ""))
+    .digest("hex")
+    .slice(0, 16);
 
 const summarizeBody = (body) => {
   if (!body || typeof body !== "object") return null;
 
   const summary = { keys: Object.keys(body).slice(0, 20) };
-
   if (body.sessionId) summary.sessionId = String(body.sessionId);
+
   if (body.message) {
     summary.messageHash = hashText(body.message);
     summary.messagePreview = clip(redactText(body.message), 120);
     summary.messageLength = String(body.message).length;
   }
+
   if (body.text) {
     summary.textHash = hashText(body.text);
     summary.textPreview = clip(redactText(body.text), 120);
   }
+
   if (body.audioBase64) summary.audioBase64Length = String(body.audioBase64).length;
   if (Array.isArray(body.files)) summary.filesCount = body.files.length;
   if (body.query) summary.query = clip(redactText(body.query), 120);
@@ -73,7 +115,7 @@ const persistAudit = async (event) => {
   try {
     await saveAuditLog(event);
   } catch (error) {
-    console.error("audit.persist error:", error.message);
+    console.error("audit.persist error:", error?.message || error);
   }
 };
 
@@ -96,6 +138,7 @@ app.use((req, res, next) => {
   const requestId = req.get("x-request-id") || crypto.randomUUID();
   const startAt = Date.now();
   req.audit = { requestId, startAt };
+  res.setHeader("X-Request-Id", requestId);
 
   void emitAudit({
     requestId,
@@ -111,58 +154,92 @@ app.use((req, res, next) => {
   });
 
   res.on("finish", () => {
-    const latencyMs = Date.now() - startAt;
     void emitAudit({
       requestId,
       endpoint: req.originalUrl,
       eventType: "request.finish",
       status: res.statusCode < 400 ? "success" : "error",
-      latencyMs,
-      metadata: {
-        method: req.method,
-        statusCode: res.statusCode,
-      },
+      latencyMs: Date.now() - startAt,
+      metadata: { method: req.method, statusCode: res.statusCode },
     });
   });
 
   next();
 });
 
-// --- Preview helper ---
 const toPreviewHtml = (targetUrl, rawHtml) => {
   const safeTitle = escapeHtml(targetUrl);
-  const body = rawHtml
+  const body = String(rawHtml || "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<meta[^>]+http-equiv=["''"]content-security-policy["''"][^>]*>/gi, "")
-    .replace(/<meta[^>]+http-equiv=["''"]x-frame-options["''"][^>]*>/gi, "");
-  return "<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" /><title>ATHINA Preview</title><base href=\"" + escapeHtml(targetUrl) + "\" /><style>body{margin:0;font-family:system-ui,sans-serif;background:#0b1120;color:#e2e8f0;}.athina-preview-top{position:sticky;top:0;z-index:10;padding:10px 12px;background:#020617;border-bottom:1px solid #1f2937;font-size:12px;color:#93c5fd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}</style></head><body><div class=\"athina-preview-top\">ATHINA preview: " + safeTitle + "</div>" + body + "</body></html>";
+    .replace(/<meta[^>]+http-equiv=["']content-security-policy["'][^>]*>/gi, "")
+    .replace(/<meta[^>]+http-equiv=["']x-frame-options["'][^>]*>/gi, "");
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ATHINA Preview</title>
+  <base href="${escapeHtml(targetUrl)}" />
+  <style>
+    body{margin:0;font-family:system-ui,sans-serif;background:#0b1120;color:#e2e8f0;}
+    .athina-preview-top{position:sticky;top:0;z-index:10;padding:10px 12px;background:#020617;border-bottom:1px solid #1f2937;font-size:12px;color:#93c5fd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  </style>
+</head>
+<body>
+  <div class="athina-preview-top">ATHINA preview: ${safeTitle}</div>
+  ${body}
+</body>
+</html>`;
 };
 
-// --- TTS ---
 const synthesizeSpeech = async (text) => {
   const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
   const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || "lxYfHSkYm1EzQzGhdbfc";
   const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5";
+
   if (!elevenLabsKey) {
     console.error("[TTS] ELEVENLABS_API_KEY is not set");
     return null;
   }
-  console.log("[TTS] Synthesizing:", text.slice(0, 80), "| model:", elevenLabsModelId, "| voice:", elevenLabsVoiceId);
-  const ttsResponse = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + elevenLabsVoiceId, {
-    method: "POST",
-    headers: { "xi-api-key": elevenLabsKey, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      text,
-      model_id: elevenLabsModelId,
-      voice_settings: { stability: 0.5, similarity_boost: 0.75, use_speaker_boost: true },
-    }),
-  });
+
+  const normalizedText = String(text || "").trim();
+  if (!normalizedText) return null;
+
+  console.log(
+    "[TTS] Synthesizing:",
+    normalizedText.slice(0, 80),
+    "| model:",
+    elevenLabsModelId,
+    "| voice:",
+    elevenLabsVoiceId
+  );
+
+  const ttsResponse = await fetch(
+    `https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoiceId}`,
+    {
+      method: "POST",
+      headers: {
+        "xi-api-key": elevenLabsKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text: normalizedText,
+        model_id: elevenLabsModelId,
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75,
+          use_speaker_boost: true,
+        },
+      }),
+    }
+  );
+
   if (!ttsResponse.ok) {
     const error = await ttsResponse.text();
-    console.error("[TTS] ElevenLabs error", ttsResponse.status, error);
-    throw new Error("ElevenLabs error " + ttsResponse.status + ": " + error);
+    throw new Error(`ElevenLabs error ${ttsResponse.status}: ${error}`);
   }
-  console.log("[TTS] Success, audio generated");
+
   return Buffer.from(await ttsResponse.arrayBuffer()).toString("base64");
 };
 
@@ -172,44 +249,47 @@ const parseAudioInput = (audioBase64) => {
 
   const dataUrlMatch = input.match(/^data:([^;]+);base64,(.+)$/i);
   if (dataUrlMatch) {
-    return {
-      mimeType: dataUrlMatch[1],
-      base64: dataUrlMatch[2],
-    };
+    return { mimeType: dataUrlMatch[1], base64: dataUrlMatch[2] };
   }
 
-  return {
-    mimeType: "audio/webm",
-    base64: input,
-  };
+  return { mimeType: "audio/webm", base64: input };
 };
 
 const transcribeSpeech = async (audioBase64) => {
   const parsed = parseAudioInput(audioBase64);
   if (!parsed) return null;
 
-  const transcriptionApiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY;
-  if (!transcriptionApiKey) return null;
+  const transcriptionApiKey = process.env.OPENAI_API_KEY;
+  if (!transcriptionApiKey) {
+    console.warn("[STT] OPENAI_API_KEY is not configured");
+    return null;
+  }
 
-  const transcriptionUrl = process.env.OPENAI_TRANSCRIPTION_URL || "https://api.openai.com/v1/audio/transcriptions";
+  const transcriptionUrl =
+    process.env.OPENAI_TRANSCRIPTION_URL ||
+    "https://api.openai.com/v1/audio/transcriptions";
   const transcriptionModel = process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1";
   const audioBuffer = Buffer.from(parsed.base64, "base64");
   const audioFile = new Blob([audioBuffer], { type: parsed.mimeType });
   const formData = new FormData();
+  const extension = parsed.mimeType.includes("wav")
+    ? "wav"
+    : parsed.mimeType.includes("mp3")
+      ? "mp3"
+      : "webm";
+
   formData.append("model", transcriptionModel);
-  formData.append("file", audioFile, `voice.${parsed.mimeType.includes("wav") ? "wav" : parsed.mimeType.includes("mp3") ? "mp3" : "webm"}`);
+  formData.append("file", audioFile, `voice.${extension}`);
 
   const response = await fetch(transcriptionUrl, {
     method: "POST",
-    headers: {
-      Authorization: "Bearer " + transcriptionApiKey,
-    },
+    headers: { Authorization: `Bearer ${transcriptionApiKey}` },
     body: formData,
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error("Speech transcription failed " + response.status + ": " + errorText);
+    throw new Error(`Speech transcription failed ${response.status}: ${errorText}`);
   }
 
   const data = await response.json();
@@ -224,29 +304,32 @@ const getGitHubConfig = () => ({
 });
 
 const getGitHubHeaders = (token) => ({
-  Authorization: "Bearer " + token,
+  Authorization: `Bearer ${token}`,
   Accept: "application/vnd.github+json",
   "User-Agent": "ATHINA-Agent",
+  "X-GitHub-Api-Version": "2022-11-28",
 });
 
-const toBase64Utf8 = (value) => Buffer.from(String(value || ""), "utf8").toString("base64");
+const toBase64Utf8 = (value) =>
+  Buffer.from(String(value || ""), "utf8").toString("base64");
 
 const fetchGitHubRepoDetails = async () => {
   const { token, owner, repo } = getGitHubConfig();
-  if (!token) {
-    throw new Error("GITHUB_TOKEN is not configured");
-  }
+  if (!token) throw new Error("GITHUB_TOKEN is not configured");
 
   const headers = getGitHubHeaders(token);
   const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
+
   if (!repoRes.ok) {
     const errText = await repoRes.text();
     throw new Error(`GitHub API error: ${repoRes.status} ${errText}`);
   }
 
   const repoData = await repoRes.json();
-  const commitsRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=5`, { headers });
-  const langsRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/languages`, { headers });
+  const [commitsRes, langsRes] = await Promise.all([
+    fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=5`, { headers }),
+    fetch(`https://api.github.com/repos/${owner}/${repo}/languages`, { headers }),
+  ]);
 
   const commitsData = commitsRes.ok ? await commitsRes.json() : [];
   const langsData = langsRes.ok ? await langsRes.json() : {};
@@ -273,20 +356,18 @@ const fetchGitHubRepoDetails = async () => {
     license: repoData.license?.name || null,
     homepage: repoData.homepage,
     languages: langsData,
-    commits: (commitsData || []).map((c) => ({
-      sha: c.sha,
-      message: c.commit?.message,
-      author: c.commit?.author?.name,
-      date: c.commit?.author?.date,
+    commits: (commitsData || []).map((commit) => ({
+      sha: commit.sha,
+      message: commit.commit?.message,
+      author: commit.commit?.author?.name,
+      date: commit.commit?.author?.date,
     })),
   };
 };
 
 const syncFilesToGitHub = async (files) => {
   const { token, owner, repo, branch } = getGitHubConfig();
-  if (!token) {
-    throw new Error("GITHUB_TOKEN is not configured");
-  }
+  if (!token) throw new Error("GITHUB_TOKEN is not configured");
 
   const headers = getGitHubHeaders(token);
   const results = [];
@@ -299,8 +380,13 @@ const syncFilesToGitHub = async (files) => {
     }
 
     try {
+      const encodedPath = filePath
+        .split("/")
+        .map((part) => encodeURIComponent(part))
+        .join("/");
+
       const checkRes = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`,
+        `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(branch)}`,
         { headers }
       );
 
@@ -311,7 +397,7 @@ const syncFilesToGitHub = async (files) => {
       }
 
       const pushRes = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
+        `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}`,
         {
           method: "PUT",
           headers: { ...headers, "Content-Type": "application/json" },
@@ -341,13 +427,12 @@ const syncFilesToGitHub = async (files) => {
         });
       }
     } catch (error) {
-      results.push({ path: filePath, success: false, error: error.message });
+      results.push({ path: filePath, success: false, error: error?.message || String(error) });
     }
   }
 
-  const succeeded = results.filter((r) => r.success).length;
-  const failed = results.filter((r) => !r.success).length;
-
+  const succeeded = results.filter((result) => result.success).length;
+  const failed = results.length - succeeded;
   return {
     success: failed === 0,
     summary: `${succeeded} synced, ${failed} failed`,
@@ -355,9 +440,74 @@ const syncFilesToGitHub = async (files) => {
   };
 };
 
-// --- Routes ---
+const extractVisibleTextFromSseChunk = (chunkText) => {
+  let text = "";
+
+  for (const line of String(chunkText || "").split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    const jsonText = line.slice(5).trim();
+    if (!jsonText || jsonText === "[DONE]") continue;
+
+    try {
+      const parsed = JSON.parse(jsonText);
+      text += parsed?.choices?.[0]?.delta?.content || parsed?.token || "";
+    } catch {
+      // Ignore incomplete SSE lines here; upstream stream is still forwarded.
+    }
+  }
+
+  return text;
+};
+
+const pipeOpenRouterStream = async ({ response, res, onChunk }) => {
+  if (!response?.body) throw new Error("OpenRouter returned no response body");
+
+  if (typeof response.body.getReader === "function") {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunkText = decoder.decode(value, { stream: true });
+      res.write(chunkText);
+      onChunk(chunkText);
+    }
+
+    return;
+  }
+
+  if (typeof response.body.on === "function") {
+    await new Promise((resolve, reject) => {
+      response.body.on("data", (chunk) => {
+        const chunkText = chunk.toString();
+        res.write(chunkText);
+        onChunk(chunkText);
+      });
+      response.body.on("end", resolve);
+      response.body.on("error", reject);
+    });
+
+    return;
+  }
+
+  throw new Error("Unsupported OpenRouter response stream");
+};
+
 app.get("/", (_req, res) => {
-  res.json({ ok: true, service: "ATHINA backend", architecture: "orchestrator + planner + memory + rule engine + execution engine + tools", endpoints: ["/health", "/api/agent", "/api/chat", "/api/speak", "/api/voice", "/api/preview"] });
+  res.json({
+    ok: true,
+    service: "ATHINA backend",
+    architecture: "orchestrator + planner + memory + rule engine + execution engine + tools",
+    endpoints: [
+      "/health",
+      "/api/agent",
+      "/api/chat",
+      "/api/speak",
+      "/api/voice",
+      "/api/preview",
+    ],
+  });
 });
 
 app.get("/health", (_req, res) => {
@@ -369,10 +519,13 @@ app.get("/api/history/:sessionId", async (req, res) => {
     const sessionId = String(req.params.sessionId || "default");
     const userId = req.query.userId ? String(req.query.userId) : null;
     const history = await getHistory(sessionId, 20, userId);
-    res.json({ success: true, sessionId, messages: history });
+    return res.json({ success: true, sessionId, messages: history });
   } catch (error) {
-    console.error("/api/history error:", error.message);
-    res.status(500).json({ error: "Failed to load history", details: error.message });
+    return res.status(500).json({
+      success: false,
+      error: "Failed to load history",
+      details: error?.message || "Unknown error",
+    });
   }
 });
 
@@ -381,13 +534,15 @@ app.get("/api/google/connect-url", async (req, res) => {
     const sessionId = String(req.query.sessionId || "default");
     const userId = req.query.userId ? String(req.query.userId) : null;
     const result = await buildGoogleConnectUrl({ sessionId, userId });
-    res.json({ success: true, ...result });
+    return res.json({ success: true, ...result });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message || "Failed to generate Google connect URL" });
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Failed to generate Google connect URL",
+    });
   }
 });
 
-// Direct OAuth redirect for a simple "Connect Google" button flow.
 app.get("/api/google/oauth", async (req, res) => {
   try {
     const sessionId = String(req.query.sessionId || "default");
@@ -396,7 +551,7 @@ app.get("/api/google/oauth", async (req, res) => {
     return res.redirect(result.url);
   } catch (error) {
     return res.status(500).type("text/html").send(
-      `<html><body style=\"font-family:system-ui;padding:24px;background:#020617;color:#fecaca\"><h2>ATHINA Google connection failed</h2><p>${escapeHtml(error.message || "unknown error")}</p></body></html>`
+      `<html><body style="font-family:system-ui;padding:24px;background:#020617;color:#fecaca"><h2>ATHINA Google connection failed</h2><p>${escapeHtml(error?.message || "unknown error")}</p></body></html>`
     );
   }
 });
@@ -406,9 +561,12 @@ app.get("/api/google/status", async (req, res) => {
     const sessionId = String(req.query.sessionId || "default");
     const userId = req.query.userId ? String(req.query.userId) : null;
     const status = await getGoogleAuthStatus({ sessionId, userId });
-    res.json({ success: true, ...status });
+    return res.json({ success: true, ...status });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message || "Failed to get Google auth status" });
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Failed to get Google auth status",
+    });
   }
 });
 
@@ -417,26 +575,41 @@ app.get("/api/google/oauth/callback", async (req, res) => {
     const code = String(req.query.code || "");
     const state = req.query.state ? String(req.query.state) : "";
     const result = await exchangeGoogleCode({ code, state });
-    res.type("text/html").send(
-      `<html><body style=\"font-family:system-ui;padding:24px;background:#020617;color:#e2e8f0\"><h2>ATHINA Google connection successful</h2><p>Your Google account is now connected for this ATHINA session/user.</p><pre>${escapeHtml(JSON.stringify(result, null, 2))}</pre></body></html>`
+    return res.type("text/html").send(
+      `<html><body style="font-family:system-ui;padding:24px;background:#020617;color:#e2e8f0"><h2>ATHINA Google connection successful</h2><p>Your Google account is now connected for this ATHINA session/user.</p><pre>${escapeHtml(JSON.stringify(result, null, 2))}</pre></body></html>`
     );
   } catch (error) {
-    res.status(500).type("text/html").send(
-      `<html><body style=\"font-family:system-ui;padding:24px;background:#020617;color:#fecaca\"><h2>ATHINA Google connection failed</h2><p>${escapeHtml(error.message || "unknown error")}</p></body></html>`
+    return res.status(500).type("text/html").send(
+      `<html><body style="font-family:system-ui;padding:24px;background:#020617;color:#fecaca"><h2>ATHINA Google connection failed</h2><p>${escapeHtml(error?.message || "unknown error")}</p></body></html>`
     );
   }
 });
 
-// Legacy-compatible function proxy routes for gradual migration.
 app.post("/api/functions/:functionName", async (req, res) => {
   try {
     const functionName = String(req.params.functionName || "");
     const requestId = req.audit?.requestId || null;
 
     if (functionName === "athinaAgent") {
-      const { message = "", sessionId = "default", userId = null, locationContext = null } = req.body || {};
-      if (!String(message).trim()) return res.status(400).json({ error: "Missing message" });
-      const result = await orchestrate({ message, sessionId, userId, mode: "text", locationContext });
+      const {
+        message = "",
+        sessionId = "default",
+        userId = null,
+        locationContext = null,
+      } = req.body || {};
+
+      if (!String(message).trim()) {
+        return res.status(400).json({ error: "Missing message" });
+      }
+
+      const result = await orchestrate({
+        message,
+        sessionId,
+        userId,
+        mode: "text",
+        locationContext,
+      });
+
       await emitAudit({
         requestId,
         sessionId,
@@ -451,34 +624,51 @@ app.post("/api/functions/:functionName", async (req, res) => {
           actionsCount: Array.isArray(result.actions) ? result.actions.length : 0,
         },
       });
+
       return res.json(result);
     }
 
     if (functionName === "proposalValidatorContext") {
-      const context = await getProposalValidatorContext();
-      return res.json(context);
+      return res.json(await getProposalValidatorContext());
     }
 
     if (functionName === "googleConnectUrl") {
       const { sessionId = "default", userId = null } = req.body || {};
-      const payload = await buildGoogleConnectUrl({ sessionId, userId });
-      return res.json({ success: true, ...payload });
+      return res.json({
+        success: true,
+        ...(await buildGoogleConnectUrl({ sessionId, userId })),
+      });
     }
 
     if (functionName === "googleAuthStatus") {
       const { sessionId = "default", userId = null } = req.body || {};
-      const status = await getGoogleAuthStatus({ sessionId, userId });
-      return res.json({ success: true, ...status });
+      return res.json({
+        success: true,
+        ...(await getGoogleAuthStatus({ sessionId, userId })),
+      });
     }
 
     if (functionName === "proposalValidatorDebug") {
-      const debug = await getProposalValidatorDebug();
-      return res.json(debug);
+      return res.json(await getProposalValidatorDebug());
     }
 
     if (functionName === "validateProposal") {
-      const { fileName = "", mimeType = "application/octet-stream", contentBase64 = "", sessionId = "default", userId = null } = req.body || {};
-      const result = await validateProposalUpload({ fileName, mimeType, contentBase64, sessionId, userId });
+      const {
+        fileName = "",
+        mimeType = "application/octet-stream",
+        contentBase64 = "",
+        sessionId = "default",
+        userId = null,
+      } = req.body || {};
+
+      const result = await validateProposalUpload({
+        fileName,
+        mimeType,
+        contentBase64,
+        sessionId,
+        userId,
+      });
+
       await emitAudit({
         requestId,
         sessionId,
@@ -492,6 +682,7 @@ app.post("/api/functions/:functionName", async (req, res) => {
           overallScore: result.result?.overallScore || null,
         },
       });
+
       return res.json(result);
     }
 
@@ -506,28 +697,33 @@ app.post("/api/functions/:functionName", async (req, res) => {
       url.searchParams.set("q", String(query));
 
       const response = await fetchWithTimeout(url.toString(), {
-        headers: { "User-Agent": "ATHINA-Agent/1.0", Accept: "application/json" },
+        headers: {
+          "User-Agent": "ATHINA-Agent/1.0",
+          Accept: "application/json",
+        },
       });
 
       if (!response.ok) {
-        return res.status(502).json({ error: "Geocoding failed with status " + response.status });
+        return res.status(502).json({
+          error: `Geocoding failed with status ${response.status}`,
+        });
       }
 
       const results = await response.json();
       return res.json({
-        results: (results || []).map((r) => ({
-          name: r.display_name,
-          lat: Number(r.lat),
-          lng: Number(r.lon),
-          type: r.type,
-          category: r.category,
+        results: (results || []).map((result) => ({
+          name: result.display_name,
+          lat: Number(result.lat),
+          lng: Number(result.lon),
+          type: result.type,
+          category: result.category,
         })),
       });
     }
 
     if (functionName === "voiceSynthesis") {
       const { text } = req.body || {};
-      if (!text || !String(text).trim()) {
+      if (!String(text || "").trim()) {
         return res.status(400).json({ error: "Missing text" });
       }
 
@@ -535,27 +731,29 @@ app.post("/api/functions/:functionName", async (req, res) => {
       if (!audio) {
         return res.status(500).json({ error: "ElevenLabs API key not configured" });
       }
+
       return res.json({ audio, format: "mp3" });
     }
 
     if (functionName === "elevenLabsSignedUrl") {
       const apiKey = process.env.ELEVENLABS_API_KEY;
-      const agentId = process.env.ELEVENLABS_AGENT_ID || "agent_3301kt6djmwmet7tp8n2jjs9f3f5";
+      const agentId =
+        process.env.ELEVENLABS_AGENT_ID || "agent_3301kt6djmwmet7tp8n2jjs9f3f5";
+
       if (!apiKey) {
         return res.status(500).json({ error: "ElevenLabs API key not configured" });
       }
 
       const response = await fetch(
-        `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${agentId}`,
-        {
-          method: "GET",
-          headers: { "xi-api-key": apiKey },
-        }
+        `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`,
+        { method: "GET", headers: { "xi-api-key": apiKey } }
       );
 
       if (!response.ok) {
-        const errText = await response.text();
-        return res.status(502).json({ error: `ElevenLabs error ${response.status}: ${errText}` });
+        const errorText = await response.text();
+        return res.status(502).json({
+          error: `ElevenLabs error ${response.status}: ${errorText}`,
+        });
       }
 
       const data = await response.json();
@@ -563,8 +761,7 @@ app.post("/api/functions/:functionName", async (req, res) => {
     }
 
     if (functionName === "githubRepo") {
-      const repo = await fetchGitHubRepoDetails();
-      return res.json({ repo });
+      return res.json({ repo: await fetchGitHubRepoDetails() });
     }
 
     if (functionName === "syncToGithub") {
@@ -572,16 +769,14 @@ app.post("/api/functions/:functionName", async (req, res) => {
       if (!Array.isArray(files) || files.length === 0) {
         return res.status(400).json({ error: "Missing files array" });
       }
+
       const result = await syncFilesToGitHub(files);
       await emitAudit({
         requestId,
         endpoint: req.originalUrl,
         eventType: "github.sync",
         status: result.success ? "success" : "error",
-        metadata: {
-          filesCount: files.length,
-          summary: result.summary,
-        },
+        metadata: { filesCount: files.length, summary: result.summary },
       });
       return res.json(result);
     }
@@ -593,20 +788,41 @@ app.post("/api/functions/:functionName", async (req, res) => {
       endpoint: req.originalUrl,
       eventType: "function.error",
       status: "error",
-      metadata: { error: clip(redactText(error.message || "unknown"), 300) },
+      metadata: { error: clip(redactText(error?.message || "unknown"), 300) },
     });
-    return res.status(500).json({ error: error.message || "Function call failed" });
+    return res.status(500).json({
+      error: error?.message || "Function call failed",
+    });
   }
 });
 
-// Main orchestrator endpoint Ã¢ÂÂ autonomous agent flow
 app.post("/api/agent", async (req, res) => {
   try {
-    const { message = "", sessionId = "default", userId = null, mode = "text", locationContext = null } = req.body;
-    if (!message.trim()) return res.status(400).json({ error: "Missing message" });
-    const result = await orchestrate({ message, sessionId, userId, mode, locationContext });
-    const shouldSynthesizeVoice = mode === "voice" && result.success && result.reply;
-    const audioBase64 = shouldSynthesizeVoice ? await synthesizeSpeech(result.reply) : null;
+    const {
+      message = "",
+      sessionId = "default",
+      userId = null,
+      mode = "text",
+      locationContext = null,
+    } = req.body || {};
+
+    if (!String(message).trim()) {
+      return res.status(400).json({ error: "Missing message" });
+    }
+
+    const result = await orchestrate({
+      message: String(message).trim(),
+      sessionId,
+      userId,
+      mode,
+      locationContext,
+    });
+
+    const audioBase64 =
+      mode === "voice" && result.reply
+        ? await synthesizeSpeech(result.reply)
+        : null;
+
     await emitAudit({
       requestId: req.audit?.requestId || null,
       sessionId,
@@ -621,188 +837,200 @@ app.post("/api/agent", async (req, res) => {
         voiceReplyIncluded: Boolean(audioBase64),
       },
     });
-    res.json({ ...result, audioBase64 });
+
+    return res.json({ ...result, audioBase64 });
   } catch (error) {
-    console.error("/api/agent error:", error.message);
-    await emitAudit({
-      requestId: req.audit?.requestId || null,
-      endpoint: req.originalUrl,
-      eventType: "agent.error",
-      status: "error",
-      metadata: { error: clip(redactText(error.message || "unknown"), 300) },
+    return res.status(500).json({
+      error: "Agent processing failed",
+      details: error?.message || "Unknown error",
     });
-    res.status(500).json({ error: "Agent processing failed", details: error.message });
   }
 });
 
-// Web page preview proxy
 app.get("/api/preview", async (req, res) => {
   try {
     const target = normalizeUrl(String(req.query.url || ""));
     if (!target) return res.status(400).send("Invalid preview URL");
+
     const response = await fetchWithTimeout(target, {
-      headers: { "User-Agent": "ATHINA-Agent/1.0", Accept: "text/html,application/xhtml+xml,text/plain" },
+      headers: {
+        "User-Agent": "ATHINA-Agent/1.0",
+        Accept: "text/html,application/xhtml+xml,text/plain",
+      },
     });
-    if (!response.ok) return res.status(response.status).send("Failed to fetch " + target);
+
+    if (!response.ok) {
+      return res.status(response.status).send(`Failed to fetch ${target}`);
+    }
+
     const contentType = response.headers.get("content-type") || "";
-    if (!contentType.includes("text")) return res.status(400).send("<pre>Non-HTML content type: " + escapeHtml(contentType) + "</pre>");
-    const html = await response.text();
-    res.type("text/html").send(toPreviewHtml(target, html));
+    if (!contentType.includes("text")) {
+      return res
+        .status(400)
+        .send(`<pre>Non-HTML content type: ${escapeHtml(contentType)}</pre>`);
+    }
+
+    return res.type("text/html").send(toPreviewHtml(target, await response.text()));
   } catch (error) {
-    res.status(500).send("Preview failed: " + escapeHtml(error.message || "unknown error"));
+    return res.status(500).send(`Preview failed: ${escapeHtml(error?.message || "unknown error")}`);
   }
 });
 
-// TTS endpoint
 app.post("/api/speak", async (req, res) => {
   try {
-    const { text = "" } = req.body;
-    if (!text.trim()) return res.status(400).json({ error: "Missing text" });
-    const audioBase64 = await synthesizeSpeech(text);
-    res.json({ success: true, audioBase64 });
+    const { text = "" } = req.body || {};
+    if (!String(text).trim()) {
+      return res.status(400).json({ error: "Missing text" });
+    }
+
+    return res.json({
+      success: true,
+      audioBase64: await synthesizeSpeech(text),
+    });
   } catch (error) {
-    console.error("/api/speak error:", error.message);
-    res.status(500).json({ error: "Speech synthesis failed", details: error.message });
+    return res.status(500).json({
+      error: "Speech synthesis failed",
+      details: error?.message || "Unknown error",
+    });
   }
 });
 
-// Chat completions (OpenAI-compatible)
 const chatCompletionsHandler = async (req, res) => {
   try {
-    const body = req.body;
+    const body = req.body || {};
     const requestId = req.audit?.requestId || null;
-    let messages, model, stream, sessionId = "default", userMessage = "", mode;
-    if (Array.isArray(body && body.messages)) {
+    let messages;
+    let model;
+    let stream;
+    let sessionId = "default";
+    let userMessage = "";
+    let mode;
+
+    if (Array.isArray(body.messages)) {
       mode = "openai";
       messages = body.messages;
       model = body.model || DEFAULT_MODEL;
-      stream = body.stream !== undefined ? body.stream : true;
+      stream = body.stream !== undefined ? Boolean(body.stream) : true;
     } else {
       mode = "athina";
-      sessionId = (body && body.sessionId) || "default";
-      userMessage = (body && body.message) || "";
+      sessionId = body.sessionId || "default";
+      userMessage = body.message || "";
       const history = await getHistory(sessionId, 6);
       messages = [
-        { role: "system", content: "You are ATHINA, an autonomous executive AI agent. Be concise, professional, and intelligent." },
+        {
+          role: "system",
+          content:
+            "You are ATHINA, an autonomous executive AI agent. Be concise, professional, and intelligent.",
+        },
         ...history,
         { role: "user", content: userMessage },
       ];
       model = DEFAULT_MODEL;
-      stream = body && body.stream !== undefined ? body.stream : true;
+      stream = body.stream !== undefined ? Boolean(body.stream) : true;
     }
-    const response = await callOpenRouter({ ...body, model, messages, stream: !!stream });
+
+    const response = await callOpenRouter({
+      ...body,
+      model,
+      messages,
+      stream,
+    });
+
+    if (!response.ok) {
+      const upstreamError = await response.text();
+      return res.status(response.status).json({
+        error: "OpenRouter request failed",
+        details: upstreamError,
+      });
+    }
+
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
+
       let fullText = "";
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunkStr = decoder.decode(value, { stream: true });
-          res.write(chunkStr);
-          for (const line of chunkStr.split("\n")) {
-            if (!line.startsWith("data:")) continue;
-            const jsonStr = line.replace("data:", "").trim();
-            if (!jsonStr || jsonStr === "[DONE]") continue;
-            try {
-              const parsed = JSON.parse(jsonStr);
-              fullText += (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content) || parsed.token || "";
-            } catch {}
-          }
-        }
-      } catch (streamError) {
-        console.error("Stream error:", streamError.message);
-        res.write("data: " + JSON.stringify({ error: "Stream error from OpenRouter" }) + "\n\n");
+      await pipeOpenRouterStream({
+        response,
+        res,
+        onChunk(chunkText) {
+          fullText += extractVisibleTextFromSseChunk(chunkText);
+        },
+      });
+
+      if (mode === "athina" && userMessage) {
+        void saveTurn(sessionId, userMessage, fullText).catch(console.error);
       }
-      if (mode === "athina") saveTurn(sessionId, userMessage, fullText).catch(console.error);
+
       await emitAudit({
         requestId,
         sessionId: mode === "athina" ? sessionId : null,
         endpoint: req.originalUrl,
         eventType: "chat.stream.complete",
         status: "success",
-        metadata: {
-          mode,
-          model,
-          stream: true,
-          outputLength: fullText.length,
-        },
+        metadata: { mode, model, stream: true, outputLength: fullText.length },
       });
+
       res.write("data: [DONE]\n\n");
-      res.end();
-      return;
+      return res.end();
     }
+
     const data = await response.json();
-    if (mode === "athina") {
-      const content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
+    if (mode === "athina" && userMessage) {
+      const content = data?.choices?.[0]?.message?.content || "";
       await saveTurn(sessionId, userMessage, content);
     }
+
     await emitAudit({
       requestId,
       sessionId: mode === "athina" ? sessionId : null,
       endpoint: req.originalUrl,
       eventType: "chat.complete",
       status: "success",
-      metadata: {
-        mode,
-        model,
-        stream: false,
-      },
+      metadata: { mode, model, stream: false },
     });
-    res.json(data);
+
+    return res.json(data);
   } catch (error) {
-    console.error("/api/chat error:", error.message);
-    await emitAudit({
-      requestId: req.audit?.requestId || null,
-      endpoint: req.originalUrl,
-      eventType: "chat.error",
-      status: "error",
-      metadata: { error: clip(redactText(error.message || "unknown"), 300) },
+    console.error("chatCompletionsHandler error:", error?.message || error);
+    if (res.headersSent) {
+      res.write(`data: ${JSON.stringify({ error: "Stream processing failed" })}\n\n`);
+      return res.end();
+    }
+
+    return res.status(500).json({
+      error: "Chat processing failed",
+      details: error?.message || "Unknown error",
     });
-    res.status(500).json({ error: "Chat processing failed", details: error.message });
   }
 };
 
-
-/*
- * OpenAI-compatible endpoints.
- * Keep these for ElevenLabs or clients that require the
- * OpenAI chat-completions format.
- */
 app.post("/v1/chat/completions", chatCompletionsHandler);
 app.post("/chat/completions", chatCompletionsHandler);
 
-/*
- * ATHINA agentic text endpoint.
- * This routes text through the orchestrator, planner,
- * rule engine, execution engine, tools, and memory.
- */
 app.post("/api/chat", async (req, res) => {
-  const requestId =
-   req.audit?.requestId || crypto. andomUUID();
+  const requestId = req.audit?.requestId || crypto.randomUUID();
 
   try {
     const {
       message = "",
-      sessionId*= "default",
+      sessionId = "default",
       userId = null,
       locationContext = null,
-    }= req.body || {};
+    } = req.body || {};
 
-    const normalizedMessage = String(message).trim);
-
+    const normalizedMessage = String(message).trim();
     if (!normalizedMessage) {
-     return res.status(400).json({        success: false,
+      return res.status(400).json({
+        success: false,
         error: "Missing message",
         reply: "Please enter a request.",
         actions: [],
-        sessionId,        requestId,
+        sessionId,
+        requestId,
       });
     }
+
     console.log("[ATHINA][/api/chat] Agent request received:", {
       requestId,
       sessionId,
@@ -810,12 +1038,12 @@ app.post("/api/chat", async (req, res) => {
       messageLength: normalizedMessage.length,
     });
 
-    onst result = await orchestrate({
+    const result = await orchestrate({
       message: normalizedMessage,
       sessionId,
       userId,
       mode: "text",
-      locationContex,
+      locationContext,
     });
 
     await emitAudit({
@@ -823,15 +1051,11 @@ app.post("/api/chat", async (req, res) => {
       sessionId,
       actorId: userId,
       endpoint: req.originalUrl,
-      eventType:"agent.chat.result",
-      status: result.success ? "success" : "erro*",
+      eventType: "agent.chat.result",
+      status: result.success ? "success" : "error",
       metadata: {
-        tasksCount: Array.isArray(result.tasks)
-          ? result.tasks.length
-          : 0,
-        actionsCount: Array.isArray(result.actions)
-          ? result.actions.length
-          : 0,
+        tasksCount: Array.isArray(result.tasks) ? result.tasks.length : 0,
+        actionsCount: Array.isArray(result.actions) ? result.actions.length : 0,
         directAction: Boolean(result.directAction),
         quickReply: Boolean(result.quickReply),
         cachedReply: Boolean(result.cachedReply),
@@ -840,93 +1064,69 @@ app.post("/api/chat", async (req, res) => {
       },
     });
 
-    /*
-     * Return a completed agent result as JSON.
-     * result.success indicates whether the requested operation
-     * itself succeeded.
-     */
-    return res.status(200).*son({
-      ...result,
-      requestId,
-    });
+    return res.status(200).json({ ...result, requestId });
   } catch (error) {
     console.error("[ATHINA][/api/chat] Orchestrator error:", {
       requestId,
       message: error?.message || "Unknown error",
-      stack
-        process.env.NODE_ENV === *development"
-          ? error?.stack
-          : undefined,
-    });
-     await emitAudit({
-      requestId,
-      endpoint: req.originalUr,
-      eventType: "agent.chat.err*r",
-      status: "error",
-      metadata: {
-        error: clip(
-          redactText(error?.message || "unknown"),
-          300
-        ,
-      },
+      stack: process.env.NODE_ENV === "development" ? error?.stack : undefined,
     });
 
-    return res*status(500).json({
-      success: *alse,
+    return res.status(500).json({
+      success: false,
       error: "Chat processing failed",
-      details: error?.me*sage || "Unknown backend error",
-      reply:
-        "I couldn't complete that request because the backend encountered an error.",
+      details: error?.message || "Unknown backend error",
+      reply: "I couldn't complete that request because the backend encountered an error.",
       actions: [],
       requestId,
     });
   }
 });
 
-// Voice endpoint
 app.post("/api/voice", async (req, res) => {
   try {
-    const { audioBase64, sessionId = "default", locationContext = null } = req.body;
-    if (!audioBase64) return res.status(400).json({ error: "Missing audioBase64" });
+    const {
+      audioBase64,
+      sessionId = "default",
+      userId = null,
+      locationContext = null,
+    } = req.body || {};
+
+    if (!audioBase64) {
+      return res.status(400).json({ success: false, error: "Missing audioBase64" });
+    }
+
     const transcript = await transcribeSpeech(audioBase64);
 
     if (!transcript) {
-      const history = await getHistory(sessionId, 6);
-      const response = await callOpenRouter({
-        model: DEFAULT_MODEL,
-        messages: [
-          { role: "system", content: "You are ATHINA, an autonomous executive AI agent. Reply in short spoken-friendly sentences." },
-          ...history,
-          { role: "user", content: "The user sent a voice message, but speech-to-text is not configured. Ask them to repeat the request in text or enable a transcription provider." },
-        ],
-        stream: false,
-        temperature: 0.3,
-        max_tokens: 300,
-      });
-      const data = await response.json();
-      const textResponse = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "I heard you, but transcription is not configured yet.";
-      await saveTurn(sessionId, "[Voice message received]", textResponse);
-      const audioBase64Response = await synthesizeSpeech(textResponse);
-      await emitAudit({
-        requestId: req.audit?.requestId || null,
+      const textResponse =
+        "I couldn't transcribe that voice message. Please try again or type your request.";
+      return res.json({
+        success: false,
+        transcript: null,
+        text: textResponse,
+        audioBase64: await synthesizeSpeech(textResponse),
         sessionId,
-        endpoint: req.originalUrl,
-        eventType: "voice.fallback",
-        status: "success",
-        metadata: {
-          transcriptAvailable: false,
-          responseLength: textResponse.length,
-        },
+        actions: [],
       });
-      res.json({ success: true, transcript: null, text: textResponse, audioBase64: audioBase64Response, sessionId });
-      return;
     }
 
-    const result = await orchestrate({ message: transcript, sessionId, mode: "voice", locationContext });
-    const audioBase64Response = await synthesizeSpeech(result.reply);
+    const result = await orchestrate({
+      message: transcript,
+      sessionId,
+      userId,
+      mode: "voice",
+      locationContext,
+    });
+
+    const audioBase64Response = result.reply
+      ? await synthesizeSpeech(result.reply)
+      : null;
+
     await emitAudit({
       requestId: req.audit?.requestId || null,
       sessionId,
+      actorId: userId,
       endpoint: req.originalUrl,
       eventType: "voice.result",
       status: result.success ? "success" : "error",
@@ -937,21 +1137,46 @@ app.post("/api/voice", async (req, res) => {
         actionsCount: Array.isArray(result.actions) ? result.actions.length : 0,
       },
     });
-    res.json({ success: true, transcript, text: result.reply, audioBase64: audioBase64Response, sessionId, actions: result.actions || [] });
-  } catch (error) {
-    console.error("/api/voice error:", error.message);
-    await emitAudit({
-      requestId: req.audit?.requestId || null,
-      endpoint: req.originalUrl,
-      eventType: "voice.error",
-      status: "error",
-      metadata: { error: clip(redactText(error.message || "unknown"), 300) },
+
+    return res.json({
+      success: result.success,
+      transcript,
+      text: result.reply,
+      audioBase64: audioBase64Response,
+      sessionId,
+      actions: result.actions || [],
+      tasks: result.tasks || [],
+      plan: result.plan || null,
     });
-    res.status(500).json({ error: "Voice processing failed", details: error.message });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: "Voice processing failed",
+      details: error?.message || "Unknown backend error",
+    });
   }
 });
 
+app.use((error, req, res, _next) => {
+  if (error?.message?.startsWith("CORS origin not allowed:")) {
+    return res.status(403).json({
+      success: false,
+      error: "CORS origin not allowed",
+      details: error.message,
+    });
+  }
+
+  console.error("[UNHANDLED]", error);
+  return res.status(500).json({
+    success: false,
+    error: "Internal server error",
+    details: process.env.NODE_ENV === "development" ? error?.message : undefined,
+  });
+});
+
 app.listen(PORT, () => {
-  console.log("ATHINA backend running on port " + PORT);
-  console.log("AUDIT_LOGS_ENABLED=" + AUDIT_LOGS_ENABLED + ", AUDIT_SUPABASE_ENABLED=" + AUDIT_SUPABASE_ENABLED);
+  console.log(`ATHINA backend running on port ${PORT}`);
+  console.log(
+    `AUDIT_LOGS_ENABLED=${AUDIT_LOGS_ENABLED}, AUDIT_SUPABASE_ENABLED=${AUDIT_SUPABASE_ENABLED}`
+  );
 });
