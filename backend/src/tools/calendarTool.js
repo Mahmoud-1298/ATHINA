@@ -1,50 +1,255 @@
 import { fetchWithTimeout } from "../utils/helpers.js";
 import { getGoogleClients } from "../utils/googleWorkspace.js";
 
-// Generates an ICS calendar event and returns a data URL
-// Future: integrate with Google Calendar API / Outlook API
+const DEFAULT_TIME_ZONE = process.env.ATHINA_TIME_ZONE || "Asia/Dubai";
+const EMAIL_PATTERN = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
 
 const normalizeAttendees = (attendees) => {
-  if (Array.isArray(attendees)) {
-    return attendees.map((value) => String(value || "").trim()).filter(Boolean);
-  }
-  if (typeof attendees === "string") {
-    return attendees.split(/[;,]/).map((value) => value.trim()).filter(Boolean);
-  }
-  return [];
+  const values = Array.isArray(attendees)
+    ? attendees
+    : typeof attendees === "string"
+      ? attendees.split(/[;,]/)
+      : [];
+
+  return Array.from(
+    new Set(
+      values
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter((value) => EMAIL_PATTERN.test(value))
+    )
+  );
 };
 
-const generateICS = ({ title, datetime, location, description, attendees = [] }) => {
-  const dt = new Date(datetime);
-  const dtStart = dt.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-  const dtEnd = new Date(dt.getTime() + 60 * 60 * 1000).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-  const attendeeLines = normalizeAttendees(attendees).map((email) => `ATTENDEE;CN=${email}:MAILTO:${email}`);
+const isValidDate = (value) => value instanceof Date && !Number.isNaN(value.getTime());
+
+const getTimeZoneOffsetMinutes = (date, timeZone) => {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+
+  const parts = Object.fromEntries(
+    formatter.formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value])
+  );
+
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+
+  return (asUtc - date.getTime()) / 60000;
+};
+
+const zonedLocalToUtc = ({ year, month, day, hour, minute }, timeZone = DEFAULT_TIME_ZONE) => {
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
+  const offsetMinutes = getTimeZoneOffsetMinutes(utcGuess, timeZone);
+  return new Date(utcGuess.getTime() - offsetMinutes * 60000);
+};
+
+const parseClock = (raw) => {
+  const text = String(raw || "").trim().toLowerCase();
+  const match = text.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = String(match[3] || "").toLowerCase();
+
+  if (minute < 0 || minute > 59) return null;
+
+  // Be forgiving with mixed formats such as "14:00 PM".
+  if (hour > 12 && meridiem) {
+    if (hour > 23) return null;
+    return { hour, minute };
+  }
+
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  if (hour < 0 || hour > 23) return null;
+
+  return { hour, minute };
+};
+
+const resolveDateText = (dateText, timeZone = DEFAULT_TIME_ZONE) => {
+  const text = String(dateText || "").trim().toLowerCase();
+  const now = new Date();
+  const localParts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .formatToParts(now)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  );
+
+  let year = Number(localParts.year);
+  let month = Number(localParts.month);
+  let day = Number(localParts.day);
+
+  if (!text || text === "today") return { year, month, day };
+
+  if (text === "tomorrow") {
+    const tomorrow = zonedLocalToUtc({ year, month, day, hour: 12, minute: 0 }, timeZone);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      })
+        .formatToParts(tomorrow)
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value])
+    );
+    return { year: Number(parts.year), month: Number(parts.month), day: Number(parts.day) };
+  }
+
+  const monthNames = {
+    january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+    july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+  };
+
+  let match = text.match(/^(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)(?:\s+(\d{4}))?$/i);
+  if (match) {
+    day = Number(match[1]);
+    month = monthNames[match[2].toLowerCase()];
+    year = match[3] ? Number(match[3]) : year;
+    return { year, month, day };
+  }
+
+  match = text.match(/^(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:,?\s+(\d{4}))?$/i);
+  if (match) {
+    month = monthNames[match[1].toLowerCase()];
+    day = Number(match[2]);
+    year = match[3] ? Number(match[3]) : year;
+    return { year, month, day };
+  }
+
+  match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+
+  return null;
+};
+
+const resolveDateTime = ({ value, date, time, timeZone = DEFAULT_TIME_ZONE }) => {
+  if (value) {
+    const direct = new Date(value);
+    if (isValidDate(direct)) return direct;
+  }
+
+  const dateParts = resolveDateText(date, timeZone);
+  const timeParts = parseClock(time);
+  if (!dateParts || !timeParts) return null;
+
+  const resolved = zonedLocalToUtc({ ...dateParts, ...timeParts }, timeZone);
+  return isValidDate(resolved) ? resolved : null;
+};
+
+const normalizeWindow = (params) => {
+  const timeZone = String(params.timeZone || DEFAULT_TIME_ZONE);
+  const durationMinutes = Math.max(1, Math.min(Number(params.durationMinutes || 60), 24 * 60));
+
+  const startDate = resolveDateTime({
+    value: params.start || params.datetime,
+    date: params.date,
+    time: params.time,
+    timeZone,
+  });
+
+  if (!startDate) return { startAt: null, endAt: null, durationMinutes, timeZone };
+
+  const explicitEnd = resolveDateTime({ value: params.end, timeZone });
+  const endDate = explicitEnd || new Date(startDate.getTime() + durationMinutes * 60 * 1000);
+
+  return {
+    startAt: startDate.toISOString(),
+    endAt: endDate.toISOString(),
+    durationMinutes,
+    timeZone,
+  };
+};
+
+const toIcsDate = (value) =>
+  new Date(value).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+
+const escapeIcsText = (value) =>
+  String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+
+const generateICS = ({ title, start, end, location, description, attendees = [] }) => {
+  const attendeeLines = normalizeAttendees(attendees).map(
+    (email) => `ATTENDEE;CN=${escapeIcsText(email)}:MAILTO:${email}`
+  );
 
   return [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "PRODID:-//ATHINA//Calendar//EN",
     "BEGIN:VEVENT",
-    "UID:" + Date.now() + "@athina",
-    "DTSTAMP:" + new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, ""),
-    "DTSTART:" + dtStart,
-    "DTEND:" + dtEnd,
-    "SUMMARY:" + (title || "ATHINA Event"),
-    location ? "LOCATION:" + location : "",
-    description ? "DESCRIPTION:" + description : "",
+    `UID:${Date.now()}-${Math.random().toString(36).slice(2)}@athina`,
+    `DTSTAMP:${toIcsDate(new Date())}`,
+    `DTSTART:${toIcsDate(start)}`,
+    `DTEND:${toIcsDate(end)}`,
+    `SUMMARY:${escapeIcsText(title || "ATHINA Event")}`,
+    location ? `LOCATION:${escapeIcsText(location)}` : "",
+    description ? `DESCRIPTION:${escapeIcsText(description)}` : "",
     ...attendeeLines,
     "END:VEVENT",
     "END:VCALENDAR",
-  ].filter(Boolean).join("\r\n");
+  ]
+    .filter(Boolean)
+    .join("\r\n");
 };
 
-export const execute = async (params) => {
+const verifyCreateResult = ({ event, title, start, end, attendees, action }) => {
+  const eventId = event?.data?.id || null;
+  const htmlLink = event?.data?.htmlLink || null;
+
+  if (!eventId) {
+    return {
+      type: "calendar",
+      success: false,
+      action,
+      error: "Calendar provider did not return an event ID. Event creation could not be verified.",
+    };
+  }
+
+  return {
+    type: "calendar",
+    success: true,
+    action,
+    created: true,
+    verified: true,
+    eventId,
+    htmlLink,
+    title,
+    start,
+    end,
+    attendees,
+  };
+};
+
+export const execute = async (params = {}) => {
   const {
     action = "create_event",
     title,
-    datetime,
-    start,
-    end,
     location,
     description,
     attendees,
@@ -55,19 +260,38 @@ export const execute = async (params) => {
     maxResults = 10,
   } = params;
 
-  const normalizedAction = String(action || "create_event").toLowerCase();
+  const normalizedAction = String(action || "create_event").trim().toLowerCase();
   const normalizedAttendees = normalizeAttendees(attendees);
+  const window = normalizeWindow(params);
 
-  const getWindow = () => {
-    const startAt = start || datetime;
-    const endAt = end || (startAt ? new Date(new Date(startAt).getTime() + 60 * 60 * 1000).toISOString() : null);
-    return { startAt, endAt };
-  };
+  if (["create_event", "ensure_slot", "check_availability"].includes(normalizedAction)) {
+    if (!window.startAt || !window.endAt) {
+      return {
+        type: "calendar",
+        success: false,
+        action: normalizedAction,
+        code: "MISSING_DATE_TIME",
+        error: "I still need a valid date and start time for the calendar action.",
+        missingFields: ["date", "time"],
+      };
+    }
+  }
+
+  if (["create_event", "ensure_slot"].includes(normalizedAction) && !String(title || "").trim()) {
+    return {
+      type: "calendar",
+      success: false,
+      action: normalizedAction,
+      code: "MISSING_TITLE",
+      error: "I still need a title for the calendar event.",
+      missingFields: ["title"],
+    };
+  }
 
   try {
     const { calendar } = await getGoogleClients({ sessionId, userId });
 
-    if (normalizedAction === "list_events" || normalizedAction === "list") {
+    if (["list_events", "list"].includes(normalizedAction)) {
       const list = await calendar.events.list({
         calendarId: "primary",
         timeMin: timeMin || new Date().toISOString(),
@@ -76,7 +300,8 @@ export const execute = async (params) => {
         singleEvents: true,
         orderBy: "startTime",
       });
-      const items = (list.data.items || []).map((event) => ({
+
+      const events = (list.data.items || []).map((event) => ({
         id: event.id,
         title: event.summary || "Untitled event",
         start: event.start?.dateTime || event.start?.date || null,
@@ -84,186 +309,149 @@ export const execute = async (params) => {
         location: event.location || "",
         htmlLink: event.htmlLink || null,
       }));
-      return { type: "calendar", success: true, action: "list", events: items, count: items.length };
+
+      return { type: "calendar", success: true, action: "list_events", events, count: events.length };
     }
 
     if (normalizedAction === "check_availability") {
-      const { startAt, endAt } = getWindow();
-      if (!startAt || !endAt) return { type: "calendar", success: false, error: "Missing start/end (or datetime) for check_availability." };
-
-      const fb = await calendar.freebusy.query({
+      const freeBusy = await calendar.freebusy.query({
         requestBody: {
-          timeMin: new Date(startAt).toISOString(),
-          timeMax: new Date(endAt).toISOString(),
+          timeMin: window.startAt,
+          timeMax: window.endAt,
           items: [{ id: "primary" }],
         },
       });
 
-      const busy = fb.data.calendars?.primary?.busy || [];
+      const conflicts = freeBusy.data.calendars?.primary?.busy || [];
       return {
         type: "calendar",
         success: true,
         action: "check_availability",
-        start: startAt,
-        end: endAt,
-        isFree: busy.length === 0,
-        conflicts: busy,
+        start: window.startAt,
+        end: window.endAt,
+        isFree: conflicts.length === 0,
+        conflicts,
       };
     }
 
     if (normalizedAction === "ensure_slot") {
-      const { startAt, endAt } = getWindow();
-      if (!title || !startAt || !endAt) {
-        return { type: "calendar", success: false, error: "Missing required parameters: title and start/end (or datetime) for ensure_slot." };
-      }
-
-      const availability = await calendar.freebusy.query({
+      const freeBusy = await calendar.freebusy.query({
         requestBody: {
-          timeMin: new Date(startAt).toISOString(),
-          timeMax: new Date(endAt).toISOString(),
+          timeMin: window.startAt,
+          timeMax: window.endAt,
           items: [{ id: "primary" }],
         },
       });
-      const busy = availability.data.calendars?.primary?.busy || [];
-      if (busy.length > 0) {
+
+      const conflicts = freeBusy.data.calendars?.primary?.busy || [];
+      if (conflicts.length > 0) {
         return {
           type: "calendar",
           success: true,
           action: "ensure_slot",
           created: false,
+          verified: true,
           isFree: false,
-          conflicts: busy,
-          note: "Time slot is already busy. Event not created.",
+          conflicts,
+          start: window.startAt,
+          end: window.endAt,
+          note: "The time slot is busy, so no event was created.",
         };
       }
-
-      const created = await calendar.events.insert({
-        calendarId: "primary",
-        sendUpdates: normalizedAttendees.length > 0 ? "all" : undefined,
-        requestBody: {
-          summary: title,
-          location: location || undefined,
-          description: description || undefined,
-          start: { dateTime: new Date(startAt).toISOString() },
-          end: { dateTime: new Date(endAt).toISOString() },
-          attendees: normalizedAttendees.length > 0 ? normalizedAttendees.map((email) => ({ email })) : undefined,
-        },
-      });
-
-      return {
-        type: "calendar",
-        success: true,
-        action: "ensure_slot",
-        created: true,
-        isFree: true,
-        eventId: created.data.id,
-        htmlLink: created.data.htmlLink,
-        title,
-        start: startAt,
-        end: endAt,
-        attendees: normalizedAttendees,
-      };
     }
 
-    const createStart = start || datetime;
-    const createEnd = end || (createStart ? new Date(new Date(createStart).getTime() + 60 * 60 * 1000).toISOString() : null);
-    if (!title || !createStart) {
-      return { type: "calendar", success: false, error: "Missing required parameters: title and start/datetime." };
-    }
-
-    const event = await calendar.events.insert({
+    const created = await calendar.events.insert({
       calendarId: "primary",
       sendUpdates: normalizedAttendees.length > 0 ? "all" : undefined,
       requestBody: {
-        summary: title,
+        summary: String(title).trim(),
         location: location || undefined,
         description: description || undefined,
-        start: { dateTime: new Date(createStart).toISOString() },
-        end: { dateTime: new Date(createEnd).toISOString() },
-        attendees: normalizedAttendees.length > 0 ? normalizedAttendees.map((email) => ({ email })) : undefined,
+        start: { dateTime: window.startAt, timeZone: window.timeZone },
+        end: { dateTime: window.endAt, timeZone: window.timeZone },
+        attendees:
+          normalizedAttendees.length > 0
+            ? normalizedAttendees.map((email) => ({ email }))
+            : undefined,
       },
     });
 
+    return verifyCreateResult({
+      event: created,
+      title: String(title).trim(),
+      start: window.startAt,
+      end: window.endAt,
+      attendees: normalizedAttendees,
+      action: normalizedAction === "ensure_slot" ? "ensure_slot" : "create_event",
+    });
+  } catch (googleError) {
+    console.warn("[CALENDAR] Google Calendar unavailable:", googleError?.message || googleError);
+  }
+
+  // ICS is a prepared fallback, not proof that an event was added to a calendar.
+  if (!["create_event", "ensure_slot"].includes(normalizedAction)) {
     return {
       type: "calendar",
-      success: true,
-      action: "create_event",
-      title,
-      start: createStart,
-      end: createEnd,
-      location,
-      attendees: normalizedAttendees,
-      eventId: event.data.id,
-      htmlLink: event.data.htmlLink,
+      success: false,
+      action: normalizedAction,
+      error: "Google Calendar is not connected for this action.",
     };
-  } catch (googleError) {
-    // Continue to legacy behavior as fallback.
   }
 
-  const fallbackStart = start || datetime;
-  if (!title || !fallbackStart) {
-    return { success: false, error: "Missing required parameters: title, datetime/start" };
-  }
-
-  const ics = generateICS({ title, datetime: fallbackStart, location, description, attendees: normalizedAttendees });
-
-  // If Google Calendar is configured, create event via API
-  const googleToken = process.env.GOOGLE_CALENDAR_TOKEN;
-  if (googleToken) {
-    try {
-      const res = await fetchWithTimeout("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
-        method: "POST",
-        headers: {
-          Authorization: "Bearer " + googleToken,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          summary: title,
-          location: location || undefined,
-          description: description || undefined,
-          start: { dateTime: fallbackStart },
-          end: { dateTime: new Date(new Date(fallbackStart).getTime() + 60 * 60 * 1000).toISOString() },
-          attendees: normalizedAttendees.length > 0 ? normalizedAttendees.map((email) => ({ email })) : undefined,
-        }),
-      });
-      if (res.ok) {
-        const event = await res.json();
-        return { type: "calendar", success: true, title, datetime: fallbackStart, location, attendees: normalizedAttendees, eventId: event.id, htmlLink: event.htmlLink };
-      }
-    } catch (e) {
-      // Fall through to ICS
-    }
-  }
+  const ics = generateICS({
+    title: String(title).trim(),
+    start: window.startAt,
+    end: window.endAt,
+    location,
+    description,
+    attendees: normalizedAttendees,
+  });
 
   return {
     type: "calendar",
     success: true,
-    title,
-    datetime: fallbackStart,
-    location,
-    description,
+    action: "prepare_ics",
+    created: false,
+    verified: false,
+    title: String(title).trim(),
+    start: window.startAt,
+    end: window.endAt,
     attendees: normalizedAttendees,
     ics,
-    icsUrl: "data:text/calendar;charset=utf8," + encodeURIComponent(ics),
+    icsUrl: `data:text/calendar;charset=utf8,${encodeURIComponent(ics)}`,
+    note: "The calendar event was prepared as an ICS file, but it was not added directly because Google Calendar is not connected.",
   };
 };
 
 export const schema = {
-  name: "calendar",
-  description: "Read and manage calendar events (Google Calendar OAuth), with ICS fallback",
-  params: {
-    action: "string (optional) - create_event | list_events | check_availability | ensure_slot",
-    title: "string (required for create_event/ensure_slot) - event title",
-    datetime: "string (optional) - ISO datetime shortcut start time",
-    start: "string (optional) - ISO start datetime",
-    end: "string (optional) - ISO end datetime",
-    timeMin: "string (optional for list_events) - ISO range start",
-    timeMax: "string (optional for list_events) - ISO range end",
-    maxResults: "number (optional for list_events)",
-    location: "string (optional) - event location",
-    description: "string (optional) - event description",
-    attendees: "string[] | string (optional) - invitee email addresses",
-    sessionId: "string (optional) - user session id for Google OAuth token lookup",
-    userId: "string (optional) - user id for Google OAuth token lookup",
+  description: "Read and manage calendar events through Google Calendar, with an ICS preparation fallback.",
+  actions: ["create_event", "list_events", "check_availability", "ensure_slot"],
+  parameters: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["create_event", "list_events", "check_availability", "ensure_slot"],
+      },
+      title: { type: "string" },
+      datetime: { type: "string", description: "ISO start date-time." },
+      start: { type: "string", description: "ISO start date-time." },
+      end: { type: "string", description: "ISO end date-time." },
+      date: { type: "string", description: "Human date such as today, tomorrow, 30 July, or July 30." },
+      time: { type: "string", description: "Human start time such as 2 PM, 14:00, or 14:00 PM." },
+      durationMinutes: { type: "number", description: "Event duration in minutes. Defaults to 60." },
+      timeZone: { type: "string", description: "IANA timezone. Defaults to Asia/Dubai." },
+      timeMin: { type: "string" },
+      timeMax: { type: "string" },
+      maxResults: { type: "number" },
+      location: { type: "string" },
+      description: { type: "string" },
+      attendees: {
+        oneOf: [
+          { type: "array", items: { type: "string" } },
+          { type: "string" },
+        ],
+      },
+    },
   },
 };
