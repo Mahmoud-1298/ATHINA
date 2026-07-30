@@ -1,4 +1,7 @@
-import { getClientIdentity, getClientUserId } from "./clientIdentity";
+import {
+  getClientIdentity,
+  getClientUserId,
+} from "./clientIdentity";
 
 export interface AgentLocateAction {
   type: "locate";
@@ -28,15 +31,39 @@ export interface AgentBrowseAction {
   error?: string;
 }
 
-export type AgentAction = AgentLocateAction | AgentBrowseAction;
+export type AgentAction =
+  | AgentLocateAction
+  | AgentBrowseAction;
+
+export interface AgentTask {
+  id: string;
+  tool: string;
+  description: string;
+  success: boolean;
+}
+
+export interface AgentPlan {
+  goal?: string;
+  steps?: string[];
+}
 
 export interface AgentResponse {
   success: boolean;
   reply: string;
   actions: AgentAction[];
   sessionId: string;
-  timestamp: string;
+  timestamp?: string;
+  requestId?: string;
   audioBase64?: string | null;
+  tasks?: AgentTask[];
+  plan?: AgentPlan | null;
+  quickReply?: boolean;
+  cachedReply?: boolean;
+  directAction?: boolean;
+  workflowCleared?: boolean;
+  planningFailed?: boolean;
+  error?: string;
+  details?: string;
 }
 
 export interface MapLocationContext {
@@ -52,37 +79,88 @@ export interface ConversationMessage {
   content: string;
 }
 
-const BACKEND_ENV_URL = [
-  import.meta.env.VITE_BACKEND_URL,
-  import.meta.env.VITE_BACKEND_UR,
-  import.meta.env.BACKEND_URL,
-  import.meta.env.BACKEND_UR,
-]
-  .filter(Boolean)
-  .map((value) => String(value).trim())
-  .find(Boolean) || "";
+/*
+ * Production fallback for ATHINA backend.
+ *
+ * VITE_BACKEND_URL can override this at build time.
+ * Do not use window.location.origin because the frontend
+ * and backend are deployed on different platforms.
+ */
+const PRODUCTION_BACKEND_URL =
+  "https://athina-4qpx.onrender.com";
 
-const DEFAULT_BACKEND_URL = BACKEND_ENV_URL ||
-  (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
+const configuredBackendUrl = String(
+  import.meta.env.VITE_BACKEND_URL ||
+    PRODUCTION_BACKEND_URL
+)
+  .trim()
+  .replace(/\/+$/, "");
 
-export const BACKEND_BASE_URL = DEFAULT_BACKEND_URL;
+export const BACKEND_BASE_URL =
+  configuredBackendUrl;
 
-const getFetchError = (url: string, response: Response, body: any) => {
-  const details = body?.details || body?.error || response.statusText || "Unknown error";
-  return new Error(
-    `Failed to fetch ${url}: ${details} (${response.status}).\n` +
-    `Front-end backend URL is ${BACKEND_BASE_URL}. Set VITE_BACKEND_URL in your frontend environment.`
-  );
+const createRequestId = (): string => {
+  if (
+    typeof globalThis.crypto !== "undefined" &&
+    typeof globalThis.crypto.randomUUID ===
+      "function"
+  ) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `athina-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
 };
 
-const parseJsonSafe = async (response: Response) => {
-  try {
-    return await response.json();
-  } catch {
+const parseJsonSafe = async (
+  response: Response
+): Promise<any> => {
+  const rawBody = await response.text();
+
+  if (!rawBody) {
     return null;
+  }
+
+  try {
+    return JSON.parse(rawBody);
+  } catch {
+    return {
+      rawBody,
+      error:
+        "The backend returned a non-JSON response.",
+    };
   }
 };
 
+const getFetchError = (
+  url: string,
+  response: Response,
+  body: any
+): Error => {
+  const details =
+    body?.details ||
+    body?.error ||
+    body?.rawBody ||
+    response.statusText ||
+    "Unknown backend error";
+
+  return new Error(
+    `ATHINA request failed at ${url}: ` +
+      `${details} (HTTP ${response.status}).`
+  );
+};
+
+/*
+ * Sends a text request through ATHINA's agentic pipeline:
+ *
+ * Orchestrator
+ * -> Rule engine
+ * -> Planner
+ * -> Execution engine
+ * -> Tools
+ * -> Memory
+ */
 export const sendAgentMessage = async (
   message: string,
   sessionId = getClientIdentity().sessionId,
@@ -90,65 +168,235 @@ export const sendAgentMessage = async (
   locationContext?: MapLocationContext | null
 ): Promise<AgentResponse> => {
   const { userId } = getClientIdentity();
-  const url = `${BACKEND_BASE_URL}/api/agent`;
+
+  const normalizedMessage =
+    String(message).trim();
+
+  if (!normalizedMessage) {
+    throw new Error(
+      "Please enter a message for ATHINA."
+    );
+  }
+
+  /*
+   * Text should use /api/chat.
+   * Voice audio should use sendVoiceMessage().
+   */
+  const url = `${BACKEND_BASE_URL}/api/chat`;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-Id": createRequestId(),
+      },
+      body: JSON.stringify({
+        message: normalizedMessage,
+        sessionId,
+        userId,
+        mode,
+        locationContext:
+          locationContext || null,
+      }),
+    });
+
+    const data = await parseJsonSafe(response);
+
+    if (!response.ok) {
+      throw getFetchError(
+        url,
+        response,
+        data
+      );
+    }
+
+    if (!data || typeof data !== "object") {
+      throw new Error(
+        "ATHINA returned an empty response."
+      );
+    }
+
+    return {
+      success: data.success === true,
+      reply:
+        data.reply ||
+        data.error ||
+        "ATHINA completed the request but returned no message.",
+      actions: Array.isArray(data.actions)
+        ? data.actions
+        : [],
+      sessionId:
+        data.sessionId || sessionId,
+      timestamp: data.timestamp,
+      requestId: data.requestId,
+      audioBase64:
+        data.audioBase64 || null,
+      tasks: Array.isArray(data.tasks)
+        ? data.tasks
+        : [],
+      plan: data.plan || null,
+      quickReply: Boolean(
+        data.quickReply
+      ),
+      cachedReply: Boolean(
+        data.cachedReply
+      ),
+      directAction: Boolean(
+        data.directAction
+      ),
+      workflowCleared: Boolean(
+        data.workflowCleared
+      ),
+      planningFailed: Boolean(
+        data.planningFailed
+      ),
+      error: data.error,
+      details: data.details,
+    };
+  } catch (error) {
+    /*
+     * A real network error has no HTTP response.
+     */
+    if (error instanceof TypeError) {
+      throw new Error(
+        `Unable to reach the ATHINA backend at ${url}. ` +
+          "Check the backend URL, deployment status, and browser network connection."
+      );
+    }
+
+    throw error;
+  }
+};
+
+export const loadConversationHistory = async (
+  sessionId = getClientIdentity().sessionId
+): Promise<{
+  success: boolean;
+  sessionId: string;
+  messages: ConversationMessage[];
+}> => {
+  const userId = getClientUserId();
+  const params = new URLSearchParams();
+
+  if (userId) {
+    params.set("userId", userId);
+  }
+
+  const query = params.toString();
+  const url =
+    `${BACKEND_BASE_URL}/api/history/` +
+    `${encodeURIComponent(sessionId)}` +
+    `${query ? `?${query}` : ""}`;
+
   const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, sessionId, userId, mode, locationContext }),
+    method: "GET",
+    headers: {
+      "X-Request-Id": createRequestId(),
+    },
   });
 
   const data = await parseJsonSafe(response);
 
   if (!response.ok) {
-    throw getFetchError(url, response, data);
+    throw getFetchError(
+      url,
+      response,
+      data
+    );
   }
 
-  return data;
+  return {
+    success: data?.success === true,
+    sessionId:
+      data?.sessionId || sessionId,
+    messages: Array.isArray(data?.messages)
+      ? data.messages
+      : [],
+  };
 };
 
-export const loadConversationHistory = async (sessionId = getClientIdentity().sessionId) => {
-  const userId = getClientUserId();
-  const params = new URLSearchParams();
-  if (userId) params.set("userId", userId);
-  const response = await fetch(`${BACKEND_BASE_URL}/api/history/${encodeURIComponent(sessionId)}${params.toString() ? `?${params.toString()}` : ""}`);
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data?.details || data?.error || "Failed to load conversation history");
-  }
-
-  return data as { success: boolean; sessionId: string; messages: ConversationMessage[] };
-};
-
-export const sendVoiceMessage = async (audioBase64: string, sessionId = getClientIdentity().sessionId) => {
+export const sendVoiceMessage = async (
+  audioBase64: string,
+  sessionId = getClientIdentity().sessionId,
+  locationContext?: MapLocationContext | null
+): Promise<AgentResponse & {
+  transcript?: string | null;
+  text?: string;
+}> => {
   const { userId } = getClientIdentity();
-  const response = await fetch(`${BACKEND_BASE_URL}/api/voice`, {
+  const url = `${BACKEND_BASE_URL}/api/voice`;
+
+  const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ audioBase64, sessionId, userId }),
+    headers: {
+      "Content-Type": "application/json",
+      "X-Request-Id": createRequestId(),
+    },
+    body: JSON.stringify({
+      audioBase64,
+      sessionId,
+      userId,
+      locationContext:
+        locationContext || null,
+    }),
   });
 
-  const data = await response.json();
+  const data = await parseJsonSafe(response);
 
   if (!response.ok) {
-    throw new Error(data?.details || data?.error || "Voice backend request failed");
+    throw getFetchError(
+      url,
+      response,
+      data
+    );
   }
 
-  return data;
+  return {
+    ...data,
+    reply:
+      data?.reply ||
+      data?.text ||
+      "ATHINA returned no voice response.",
+    actions: Array.isArray(data?.actions)
+      ? data.actions
+      : [],
+    sessionId:
+      data?.sessionId || sessionId,
+  };
 };
 
-export const speakText = async (text: string) => {
-  const response = await fetch(`${BACKEND_BASE_URL}/api/speak`, {
+export const speakText = async (
+  text: string
+): Promise<{
+  success: boolean;
+  audioBase64: string | null;
+}> => {
+  const url = `${BACKEND_BASE_URL}/api/speak`;
+
+  const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Request-Id": createRequestId(),
+    },
     body: JSON.stringify({ text }),
   });
 
-  const data = await response.json();
+  const data = await parseJsonSafe(response);
 
   if (!response.ok) {
-    throw new Error(data?.details || data?.error || "Speech synthesis failed");
+    throw getFetchError(
+      url,
+      response,
+      data
+    );
   }
 
-  return data as { success: boolean; audioBase64: string | null };
+  return {
+    success: data?.success === true,
+    audioBase64:
+      data?.audioBase64 || null,
+  };
 };
+``
