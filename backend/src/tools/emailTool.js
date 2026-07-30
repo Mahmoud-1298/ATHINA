@@ -6,16 +6,88 @@ let transporter = null;
 const getTransporter = () => {
   if (transporter) return transporter;
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) return null;
+
   transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT) || 587,
     secure: process.env.SMTP_SECURE === "true",
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
   });
+
   return transporter;
 };
 
-export const execute = async (params) => {
+const decodeBase64Url = (value) => {
+  if (!value) return "";
+  const normalized = String(value).replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  return Buffer.from(padded, "base64").toString("utf8");
+};
+
+const stripHtml = (html) =>
+  String(html || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<head[\s\S]*?<\/head>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p\s*>/gi, "\n")
+    .replace(/<\/div\s*>/gi, "\n")
+    .replace(/<\/li\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#x2F;/gi, "/")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n\s*\n+/g, "\n\n")
+    .trim();
+
+const collectMimeBodies = (part, output = { plain: [], html: [] }) => {
+  if (!part || typeof part !== "object") return output;
+
+  const mimeType = String(part.mimeType || "").toLowerCase();
+  const data = part.body?.data;
+
+  if (data) {
+    const decoded = decodeBase64Url(data);
+    if (mimeType === "text/plain") output.plain.push(decoded);
+    if (mimeType === "text/html") output.html.push(decoded);
+  }
+
+  for (const child of part.parts || []) collectMimeBodies(child, output);
+  return output;
+};
+
+const extractReadableBody = (payload, snippet = "") => {
+  const collected = collectMimeBodies(payload);
+  const plainText = collected.plain.join("\n\n").trim();
+  if (plainText) return { text: plainText, bodyType: "text/plain" };
+
+  const htmlText = stripHtml(collected.html.join("\n\n"));
+  if (htmlText) return { text: htmlText, bodyType: "text/html" };
+
+  const directData = payload?.body?.data ? decodeBase64Url(payload.body.data) : "";
+  if (directData) {
+    const isHtml = /<html|<body|<!doctype/i.test(directData);
+    return {
+      text: isHtml ? stripHtml(directData) : directData.trim(),
+      bodyType: isHtml ? "text/html" : "text/plain",
+    };
+  }
+
+  return { text: String(snippet || "").trim(), bodyType: "snippet" };
+};
+
+const normalizeRecipient = (to) => {
+  if (Array.isArray(to)) return to.map(String).map((value) => value.trim()).filter(Boolean).join(", ");
+  return String(to || "").trim();
+};
+
+export const execute = async (params = {}) => {
   const {
     action = "send",
     provider = "google",
@@ -29,33 +101,37 @@ export const execute = async (params) => {
     userId = null,
   } = params;
 
-  const normalizedAction = String(action || "send").toLowerCase();
+  const normalizedAction = String(action || "send").trim().toLowerCase();
+  const normalizedProvider = String(provider || "google").trim().toLowerCase();
 
-  if (provider === "google") {
+  if (normalizedProvider === "google") {
     const { gmail } = await getGoogleClients({ sessionId, userId });
 
-    if (normalizedAction === "list" || normalizedAction === "read_recent") {
+    if (["list", "read_recent"].includes(normalizedAction)) {
       const listRes = await gmail.users.messages.list({
         userId: "me",
         maxResults: Math.min(Number(maxResults) || 10, 20),
         q: query || undefined,
       });
-      const messages = listRes.data.messages || [];
-      const hydrated = [];
 
-      for (const message of messages.slice(0, 10)) {
+      const hydrated = [];
+      for (const message of (listRes.data.messages || []).slice(0, 10)) {
         const messageRes = await gmail.users.messages.get({
           userId: "me",
           id: message.id,
           format: "metadata",
-          metadataHeaders: ["From", "Subject", "Date"],
+          metadataHeaders: ["From", "To", "Subject", "Date"],
         });
+
         const headers = messageRes.data.payload?.headers || [];
-        const findHeader = (name) => headers.find((h) => String(h.name || "").toLowerCase() === name.toLowerCase())?.value || "";
+        const findHeader = (name) =>
+          headers.find((header) => String(header.name || "").toLowerCase() === name.toLowerCase())?.value || "";
+
         hydrated.push({
           id: message.id,
           threadId: message.threadId,
           from: findHeader("From"),
+          to: findHeader("To"),
           subject: findHeader("Subject"),
           date: findHeader("Date"),
           snippet: messageRes.data.snippet || "",
@@ -66,7 +142,10 @@ export const execute = async (params) => {
     }
 
     if (normalizedAction === "read") {
-      if (!messageId) return { type: "email", success: false, error: "Missing messageId for read action." };
+      if (!messageId) {
+        return { type: "email", success: false, action: "read", error: "Missing messageId for read action." };
+      }
+
       const messageRes = await gmail.users.messages.get({
         userId: "me",
         id: messageId,
@@ -75,13 +154,9 @@ export const execute = async (params) => {
 
       const payload = messageRes.data.payload || {};
       const headers = payload.headers || [];
-      const findHeader = (name) => headers.find((h) => String(h.name || "").toLowerCase() === name.toLowerCase())?.value || "";
-      const parts = payload.parts || [];
-      const bodyPart = parts.find((p) => p.mimeType === "text/plain") || parts.find((p) => p.mimeType === "text/html") || payload;
-      const encodedBody = bodyPart?.body?.data || "";
-      const decodedBody = encodedBody
-        ? Buffer.from(String(encodedBody).replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")
-        : "";
+      const findHeader = (name) =>
+        headers.find((header) => String(header.name || "").toLowerCase() === name.toLowerCase())?.value || "";
+      const readable = extractReadableBody(payload, messageRes.data.snippet || "");
 
       return {
         type: "email",
@@ -95,44 +170,67 @@ export const execute = async (params) => {
           subject: findHeader("Subject"),
           date: findHeader("Date"),
           snippet: messageRes.data.snippet || "",
-          body: decodedBody,
+          body: readable.text,
+          bodyType: readable.bodyType,
         },
       };
     }
 
-    if (!to || !subject) {
-      return { success: false, error: "Missing required parameters: to, subject" };
+    const recipient = normalizeRecipient(to);
+    if (!recipient || !String(subject || "").trim()) {
+      return {
+        type: "email",
+        success: false,
+        action: normalizedAction,
+        error: "Missing required parameters: to and subject.",
+      };
     }
 
     const mime = [
-      `To: ${to}`,
-      `Subject: ${subject}`,
+      `To: ${recipient}`,
+      `Subject: ${String(subject).trim()}`,
       "Content-Type: text/plain; charset=utf-8",
       "MIME-Version: 1.0",
       "",
-      body || "",
-    ].join("\n");
+      String(body || ""),
+    ].join("\r\n");
 
-    const raw = Buffer.from(mime, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const raw = Buffer.from(mime, "utf8")
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+
     const sent = await gmail.users.messages.send({
       userId: "me",
       requestBody: { raw },
     });
 
+    if (!sent.data.id) {
+      return {
+        type: "email",
+        success: false,
+        action: "send",
+        error: "Gmail did not return a message ID. Email delivery could not be verified.",
+      };
+    }
+
     return {
       type: "email",
       success: true,
+      verified: true,
       action: "send",
       provider: "google",
-      to,
-      subject,
+      to: recipient,
+      subject: String(subject).trim(),
       messageId: sent.data.id,
       threadId: sent.data.threadId,
     };
   }
 
-  if (!to || !subject) {
-    return { success: false, error: "Missing required parameters: to, subject" };
+  const recipient = normalizeRecipient(to);
+  if (!recipient || !String(subject || "").trim()) {
+    return { type: "email", success: false, action: "send", error: "Missing required parameters: to and subject." };
   }
 
   const transport = getTransporter();
@@ -140,41 +238,52 @@ export const execute = async (params) => {
     return {
       type: "email",
       success: false,
-      error: "Email not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS environment variables.",
-      to, subject, body,
+      action: "send",
+      error: "Email is not configured. Set SMTP_HOST, SMTP_USER, and SMTP_PASS.",
+      to: recipient,
+      subject,
     };
   }
 
   const info = await transport.sendMail({
     from: process.env.SMTP_FROM || process.env.SMTP_USER,
-    to,
-    subject,
-    text: body || "",
-    html: (body || "").replace(/\n/g, "<br>"),
+    to: recipient,
+    subject: String(subject).trim(),
+    text: String(body || ""),
+    html: String(body || "").replace(/\n/g, "<br>"),
   });
 
   return {
     type: "email",
-    success: true,
-    to,
-    subject,
+    success: Boolean(info.messageId),
+    verified: Boolean(info.messageId),
+    action: "send",
+    provider: "smtp",
+    to: recipient,
+    subject: String(subject).trim(),
     messageId: info.messageId,
   };
 };
 
 export const schema = {
-  name: "email",
-  description: "Send and read emails using Gmail OAuth (fallback SMTP send supported)",
-  params: {
-    action: "string (optional) - send | list | read",
-    provider: "string (optional) - google | smtp, default google",
-    to: "string (required for send) - recipient email address",
-    subject: "string (required for send) - email subject",
-    body: "string (optional) - email body text",
-    query: "string (optional for list) - Gmail search query",
-    maxResults: "number (optional for list) - number of messages",
-    messageId: "string (required for read) - Gmail message id",
-    sessionId: "string (optional) - user session id for Google OAuth token lookup",
-    userId: "string (optional) - user id for Google OAuth token lookup",
+  description: "Send and read email through Gmail OAuth, with SMTP fallback for sending.",
+  actions: ["send", "list", "read"],
+  parameters: {
+    type: "object",
+    properties: {
+      action: { type: "string", enum: ["send", "list", "read"] },
+      provider: { type: "string", enum: ["google", "smtp"] },
+      to: {
+        oneOf: [
+          { type: "string" },
+          { type: "array", items: { type: "string" } },
+        ],
+      },
+      subject: { type: "string" },
+      body: { type: "string" },
+      query: { type: "string" },
+      maxResults: { type: "number" },
+      messageId: { type: "string" },
+    },
   },
 };
