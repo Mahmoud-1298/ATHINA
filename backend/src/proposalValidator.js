@@ -86,7 +86,6 @@ const CATEGORIES = [
   },
 ];
 
-const CATEGORY_BY_KEY = new Map(CATEGORIES.map((item) => [item.key, item]));
 const CORE_CATEGORY_KEYS = new Set([
   "legal",
   "finance",
@@ -332,25 +331,16 @@ const calculateEvidenceScore = (
 
 const applyGrounding = (modelScore, evidence, categoryKey) => {
   const score = clamp(modelScore);
-  if (categoryKey === "grammar") return Math.round(score);
-  if (!evidence.hasReferences) return Math.min(Math.round(score), 55);
 
-  if (
-    evidence.semanticOverlap < 0.015 &&
-    evidence.proposalCoverage < 0.04 &&
-    evidence.numericOverlap === 0
-  ) {
-    return Math.min(Math.round(score), 15);
+  // Missing reference coverage is not the same as proposal failure.
+  // Grammar, context, and architecture can still be assessed for intrinsic quality.
+  if (categoryKey === "grammar" || !evidence.hasReferences) {
+    return Math.round(score);
   }
 
-  if (
-    evidence.semanticOverlap < 0.035 &&
-    evidence.proposalCoverage < 0.08
-  ) {
-    return Math.min(Math.round(score), 35);
-  }
-
-  return Math.round(score * 0.8 + evidence.score * 0.2);
+  // Deterministic overlap is supporting evidence, not an overriding verdict.
+  // Keep the model assessment dominant and use overlap as a modest adjustment.
+  return Math.round(clamp(score * 0.9 + evidence.score * 0.1));
 };
 
 const buildProposalDiagnostics = (text) => {
@@ -387,6 +377,117 @@ const buildProposalDiagnostics = (text) => {
     sections,
     detectedSectionCount: detectedCount,
     completenessPercent: Math.round((detectedCount / checks.length) * 100),
+  };
+};
+
+const parseMoney = (value) =>
+  Number(String(value || "").replace(/[^0-9.-]/g, ""));
+
+const extractCommercialChecks = (text) => {
+  const source = String(text || "");
+  const checks = [];
+
+  const excludingMatch = source.match(
+    /total\s+excluding\s+vat\s*(?:\(aed\))?\s*[:\-]?\s*([\d,]+(?:\.\d{1,2})?)/i
+  );
+  const vatMatch = source.match(
+    /vat\s*(?:[-–]\s*)?5%\s*[:\-]?\s*([\d,]+(?:\.\d{1,2})?)/i
+  );
+  const grandMatch = source.match(
+    /grand\s+total(?:\s+including\s+vat)?\s*[:\-]?\s*([\d,]+(?:\.\d{1,2})?)/i
+  );
+
+  const excluding = parseMoney(excludingMatch?.[1]);
+  const vat = parseMoney(vatMatch?.[1]);
+  const grand = parseMoney(grandMatch?.[1]);
+
+  if (Number.isFinite(excluding) && Number.isFinite(vat)) {
+    const expectedVat = Number((excluding * 0.05).toFixed(2));
+    checks.push({
+      id: "VAT-RECALCULATION",
+      status: Math.abs(vat - expectedVat) < 0.01 ? "pass" : "fail",
+      stated: vat,
+      expected: expectedVat,
+      message:
+        Math.abs(vat - expectedVat) < 0.01
+          ? "VAT equals 5% of the excluding-VAT total."
+          : "The stated VAT does not equal 5% of the excluding-VAT total.",
+    });
+  }
+
+  if (
+    Number.isFinite(excluding) &&
+    Number.isFinite(vat) &&
+    Number.isFinite(grand)
+  ) {
+    const expectedGrand = Number((excluding + vat).toFixed(2));
+    checks.push({
+      id: "GRAND-TOTAL-RECALCULATION",
+      status: Math.abs(grand - expectedGrand) < 0.01 ? "pass" : "fail",
+      stated: grand,
+      expected: expectedGrand,
+      message:
+        Math.abs(grand - expectedGrand) < 0.01
+          ? "The grand total equals the excluding-VAT total plus VAT."
+          : "The grand total does not reconcile with the excluding-VAT total and VAT.",
+    });
+  }
+
+  const paymentSection =
+    source.match(/payment\s+terms([\s\S]*?)(?:financial\s+and\s+commercial\s+terms|warranty|legal\s+and\s+contractual)/i)?.[1] ||
+    "";
+
+  const rowPattern = /(\d{1,3})\s*%[\s\S]{0,180}?([\d,]+\.\d{2})[\s\S]{0,100}?([\d,]+\.\d{2})/g;
+  const milestones = [];
+  let rowMatch;
+  while ((rowMatch = rowPattern.exec(paymentSection)) !== null) {
+    milestones.push({
+      percentage: Number(rowMatch[1]),
+      excludingVat: parseMoney(rowMatch[2]),
+      includingVat: parseMoney(rowMatch[3]),
+    });
+  }
+
+  if (milestones.length >= 4 && Number.isFinite(excluding)) {
+    const operationalRows = milestones.filter((item) => item.percentage < 100);
+    const percentageTotal = operationalRows.reduce(
+      (sum, item) => sum + item.percentage,
+      0
+    );
+    checks.push({
+      id: "MILESTONE-PERCENTAGE-TOTAL",
+      status: percentageTotal === 100 ? "pass" : "fail",
+      stated: percentageTotal,
+      expected: 100,
+      message:
+        percentageTotal === 100
+          ? "Payment milestone percentages total 100%."
+          : "Payment milestone percentages do not total 100%.",
+    });
+
+    operationalRows.forEach((item, index) => {
+      const expected = Number(
+        (excluding * (item.percentage / 100)).toFixed(2)
+      );
+      checks.push({
+        id: `MILESTONE-${index + 1}-AMOUNT`,
+        status:
+          Math.abs(item.excludingVat - expected) < 0.01 ? "pass" : "fail",
+        percentage: item.percentage,
+        stated: item.excludingVat,
+        expected,
+        message:
+          Math.abs(item.excludingVat - expected) < 0.01
+            ? `The ${item.percentage}% milestone amount is correct.`
+            : `The ${item.percentage}% milestone amount does not match the excluding-VAT contract value.`,
+      });
+    });
+  }
+
+  return {
+    checks,
+    passed: checks.filter((item) => item.status === "pass").length,
+    failed: checks.filter((item) => item.status === "fail").length,
   };
 };
 
@@ -449,14 +550,66 @@ const buildValidatorPrompt = (packets, diagnostics) => {
 
 const normalizeStringArray = (value, limit = 5) =>
   Array.isArray(value)
-    ? value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, limit)
+    ? value
+        .map((item) => String(item || "").trim())
+        .filter(
+          (item) =>
+            item &&
+            !/^(none|n\/?a|not applicable|no issues|nothing identified)$/i.test(item)
+        )
+        .slice(0, limit)
     : [];
+
+const categorySystemPrompt = (packet) => [
+  "You are ATHINA Commercial Proposal Validator.",
+  "Return ONLY one valid JSON object. Do not use markdown or code fences.",
+  `Evaluate only the ${packet.key} category.`,
+  "Use the supplied reference extracts as authoritative when available.",
+  "If no category reference is available, assess intrinsic proposal completeness and clearly mark lower confidence; do not assign zero merely because no reference exists.",
+  "Do not invent requirements, file names, clauses, figures, or evidence.",
+  "Every issue must be traceable to a proposal excerpt or named reference file.",
+  "Scores: 90-100 excellent; 80-89 strong; 65-79 acceptable with conditions; 45-64 major rework; 0-44 unacceptable or unsupported.",
+  "Output keys: key, score, confidence, achieved, assessment, strengths, issues, recommendations, referencesUsed, proposalEvidence, referenceEvidence.",
+  "The key must exactly match the requested category.",
+  "Keep each list to maximum four concise items.",
+].join("\n");
+
+const validateCategoryPacket = async (packet) => {
+  const userPrompt = [
+    `CATEGORY: ${packet.key}`,
+    `LABEL: ${packet.label}`,
+    `REFERENCE FILES: ${packet.files.map((file) => file.name).join(", ") || "None"}`,
+    "REFERENCE EXTRACTS:",
+    packet.referenceText || "No category-specific reference is available.",
+    "PROPOSAL EXTRACTS:",
+    packet.proposalExtract,
+  ].join("\n\n");
+
+  const response = await callLLM({
+    messages: [
+      { role: "system", content: categorySystemPrompt(packet) },
+      { role: "user", content: userPrompt },
+    ],
+    temperature: 0.05,
+    maxTokens: 1100,
+    jsonMode: true,
+  });
+
+  const parsed =
+    typeof response === "string" ? safeJsonParse(response) : response;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`ATHINA could not parse the ${packet.key} validation output.`);
+  }
+
+  return { ...parsed, key: packet.key };
+};
 
 const normalizeValidationResult = (
   result,
   referenceFiles,
   proposalText,
-  diagnostics
+  diagnostics,
+  commercialChecks
 ) => {
   const modelCategories = Array.isArray(result?.categories)
     ? result.categories
@@ -508,7 +661,13 @@ const normalizeValidationResult = (
       ),
       proposalEvidence: normalizeStringArray(match?.proposalEvidence, 4),
       referenceEvidence: normalizeStringArray(match?.referenceEvidence, 4),
-      confidence: clamp(match?.confidence || (evidence.hasReferences ? 65 : 40)),
+      confidence: clamp(
+        match?.confidence ||
+          (evidence.hasReferences ? 75 : 55)
+      ),
+      referenceCoverage: evidence.hasReferences
+        ? "available"
+        : "not_available",
       evidence: {
         hasReferences: evidence.hasReferences,
         semanticOverlap: Number(evidence.semanticOverlap.toFixed(4)),
@@ -561,10 +720,17 @@ const normalizeValidationResult = (
     decision = "conditional";
   }
 
+  const deterministicFailures = (commercialChecks?.checks || [])
+    .filter((item) => item.status === "fail")
+    .map((item) => item.message);
   const modelMissingItems = normalizeStringArray(result?.missingItems, 10);
   const missingItems = Array.from(
-    new Set([...hardGateFailures, ...modelMissingItems])
-  ).slice(0, 10);
+    new Set([
+      ...hardGateFailures,
+      ...deterministicFailures,
+      ...modelMissingItems,
+    ])
+  ).slice(0, 12);
 
   return {
     summary:
@@ -577,6 +743,7 @@ const normalizeValidationResult = (
     hardGateFailures,
     missingItems,
     proposalDiagnostics: diagnostics,
+    deterministicCommercialChecks: commercialChecks,
     categories,
     disclaimer:
       "ATHINA provides a structured commercial-review aid. Final legal, financial, pricing, and technical approval remains with authorized reviewers.",
@@ -841,57 +1008,73 @@ export const validateProposalUpload = async ({
   });
 
   const diagnostics = buildProposalDiagnostics(proposalText);
+  const commercialChecks = extractCommercialChecks(proposalText);
   const packets = buildCategoryPackets(referenceFiles, proposalText);
-  const validatorEvidence = buildValidatorPrompt(packets, diagnostics);
 
-  const messages = [
-    {
-      role: "system",
-      content: [
-        "You are ATHINA Commercial Proposal Validator.",
-        "Return ONLY valid JSON. Do not use markdown or code fences.",
-        "Act as a rigorous first-line commercial review assistant, not as the final legal or financial authority.",
-        "Evaluate only these six categories exactly once: legal, finance, pricing, grammar, context, architecture.",
-        "Use the supplied reference files as the source of truth for company requirements.",
-        "Do not invent requirements, citations, clauses, figures, file names, or proposal evidence.",
-        "Every material issue must be traceable to either a proposal excerpt or a named reference file.",
-        "If evidence is missing, state that it is missing instead of assuming compliance.",
-        "Scores: 90-100 excellent; 80-89 strong; 65-79 acceptable with conditions; 45-64 major rework; 0-44 unacceptable or unsupported.",
-        "Grammar assesses clarity, consistency, spelling, presentation, and professional readability from the proposal itself.",
-        "Legal assesses contractual completeness and alignment, but must not present legal advice.",
-        "Pricing and finance must check totals, recurring/one-time separation, currency, VAT/tax, validity, payment terms, and numeric consistency where applicable.",
-        "Architecture must check proposed design, integrations, security, availability, backup/DR, support, sizing, assumptions, and alignment to technical references where applicable.",
-        "Context must check objectives, scope, deliverables, exclusions, assumptions, timeline, acceptance, and customer-specific alignment.",
-        "Output keys: summary, confidence, missingItems, categories.",
-        "Each category object must contain: key, score, confidence, achieved, assessment, strengths, issues, recommendations, referencesUsed, proposalEvidence, referenceEvidence.",
-        "proposalEvidence and referenceEvidence must contain short verbatim excerpts, not invented paraphrases.",
-        "Keep each list to a maximum of four concise items.",
-      ].join("\n"),
-    },
-    {
-      role: "user",
-      content: validatorEvidence,
-    },
-  ];
-
-  const llmResult = await callLLM({
-    messages,
-    temperature: 0.05,
-    maxTokens: 4200,
-    jsonMode: true,
+  console.log("[VALIDATOR] Starting category validation", {
+    proposalName: fileName,
+    proposalCharacters: proposalText.length,
+    references: referenceFiles.map((file) => ({
+      name: file.name,
+      category: file.category,
+    })),
+    packetSizes: packets.map((packet) => ({
+      key: packet.key,
+      referenceCharacters: packet.referenceText.length,
+      proposalCharacters: packet.proposalExtract.length,
+    })),
   });
 
-  const parsed =
-    typeof llmResult === "string" ? safeJsonParse(llmResult) : llmResult;
-  if (!parsed) {
-    throw new Error("ATHINA could not parse the validator output.");
+  const categoryResults = [];
+  const categoryErrors = [];
+
+  // Sequential calls are more reliable with rate-limited/free model providers.
+  for (const packet of packets) {
+    try {
+      const categoryResult = await validateCategoryPacket(packet);
+      categoryResults.push(categoryResult);
+      console.log("[VALIDATOR] Category completed", {
+        key: packet.key,
+        score: categoryResult.score,
+        confidence: categoryResult.confidence,
+      });
+    } catch (error) {
+      categoryErrors.push({
+        key: packet.key,
+        error: error?.message || String(error),
+      });
+      console.error("[VALIDATOR] Category failed", {
+        key: packet.key,
+        error: error?.message || error,
+      });
+    }
   }
+
+  if (categoryResults.length !== CATEGORIES.length) {
+    throw new Error(
+      `Proposal validation was incomplete. Completed ${categoryResults.length}/${CATEGORIES.length} categories. ` +
+        categoryErrors.map((item) => `${item.key}: ${item.error}`).join("; ")
+    );
+  }
+
+  const parsed = {
+    summary: "Category-by-category proposal validation completed.",
+    confidence: Math.round(
+      categoryResults.reduce(
+        (sum, item) => sum + clamp(item.confidence || 0),
+        0
+      ) / categoryResults.length
+    ),
+    missingItems: [],
+    categories: categoryResults,
+  };
 
   const result = normalizeValidationResult(
     parsed,
     referenceFiles,
     proposalText,
-    diagnostics
+    diagnostics,
+    commercialChecks
   );
 
   const reportId = await saveValidationReport({
