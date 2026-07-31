@@ -594,17 +594,82 @@ const normalizeConfidence = (value, fallback = 50) => {
   return Math.round(clamp(number));
 };
 
-const unwrapCategoryResult = (parsed) => {
-  if (!parsed || typeof parsed !== "object") return null;
-  if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
-    return parsed.categories[0];
+const unwrapCategoryResult = (parsed, expectedKey) => {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
   }
-  if (parsed.category && typeof parsed.category === "object") {
+
+  // Some models return { legal: { score, assessment, ... } }.
+  // Support the expected category key before generic wrappers.
+  const keyedResult = parsed[expectedKey];
+  if (
+    keyedResult &&
+    typeof keyedResult === "object" &&
+    !Array.isArray(keyedResult)
+  ) {
+    return {
+      ...keyedResult,
+      key: expectedKey,
+    };
+  }
+
+  if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
+    const matchingCategory = parsed.categories.find(
+      (item) =>
+        String(item?.key || "").trim().toLowerCase() === expectedKey
+    );
+
+    return matchingCategory || parsed.categories[0];
+  }
+
+  if (
+    parsed.category &&
+    typeof parsed.category === "object" &&
+    !Array.isArray(parsed.category)
+  ) {
     return parsed.category;
   }
-  if (parsed.result && typeof parsed.result === "object") {
+
+  if (
+    parsed.result &&
+    typeof parsed.result === "object" &&
+    !Array.isArray(parsed.result)
+  ) {
+    const nestedResult = parsed.result[expectedKey];
+
+    if (
+      nestedResult &&
+      typeof nestedResult === "object" &&
+      !Array.isArray(nestedResult)
+    ) {
+      return {
+        ...nestedResult,
+        key: expectedKey,
+      };
+    }
+
     return parsed.result;
   }
+
+  // Also support a single unknown wrapper such as
+  // { assessment_result: { score, assessment, ... } }.
+  const objectEntries = Object.entries(parsed).filter(
+    ([, value]) =>
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value)
+  );
+
+  if (
+    objectEntries.length === 1 &&
+    Number.isFinite(Number(objectEntries[0][1]?.score))
+  ) {
+    return {
+      ...objectEntries[0][1],
+      key: expectedKey,
+    };
+  }
+
   return parsed;
 };
 
@@ -643,6 +708,8 @@ const categorySystemPrompt = (packet) => [
   "Scores: 90-100 excellent; 80-89 strong; 65-79 acceptable with conditions; 45-64 major rework; 0-44 unacceptable or unsupported.",
   "Output keys: key, score, confidence, achieved, assessment, strengths, issues, recommendations, referencesUsed, proposalEvidence, referenceEvidence.",
   "The key must exactly match the requested category.",
+  `Return this exact top-level shape: {"key":"${packet.key}","score":85,"confidence":90,"achieved":"...","assessment":"...","strengths":[],"issues":[],"recommendations":[],"referencesUsed":[],"proposalEvidence":[],"referenceEvidence":[]}.`,
+  `Do not wrap the object inside a property named "${packet.key}", "category", or "result".`,
   "Keep each list to maximum four concise items.",
 ].join("\n");
 
@@ -687,7 +754,7 @@ const validateCategoryPacket = async (packet) => {
 
     const parsed =
       typeof response === "string" ? safeJsonParse(response) : response;
-    const candidate = unwrapCategoryResult(parsed);
+    const candidate = unwrapCategoryResult(parsed, packet.key);
     const validation = validateCategoryOutput(candidate, packet.key);
 
     if (validation.valid) {
@@ -707,9 +774,14 @@ const validateCategoryPacket = async (packet) => {
       key: packet.key,
       attempt,
       errors: validation.errors,
-      receivedKeys: candidate && typeof candidate === "object"
-        ? Object.keys(candidate)
-        : [],
+      receivedKeys:
+        candidate && typeof candidate === "object"
+          ? Object.keys(candidate)
+          : [],
+      topLevelKeys:
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? Object.keys(parsed)
+          : [],
     });
   }
 
