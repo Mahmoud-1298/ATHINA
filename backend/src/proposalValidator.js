@@ -113,8 +113,8 @@ const clamp = (value, min = 0, max = 100) =>
 const trimForPrompt = (text, maxChars) =>
   String(text || "").slice(0, maxChars);
 
-const detectCategory = (fileName, content = "") => {
-  const text = `${normalizeName(fileName)} ${normalizeName(content).slice(0, 1800)}`;
+const detectCategoryFromContent = (content = "") => {
+  const text = normalizeName(content).slice(0, 5000);
   const scores = CATEGORIES.map((category) => ({
     key: category.key,
     score: category.keywords.reduce(
@@ -124,6 +124,32 @@ const detectCategory = (fileName, content = "") => {
   })).sort((a, b) => b.score - a.score);
 
   return scores[0]?.score > 0 ? scores[0].key : "context";
+};
+
+const detectCategory = (fileName, content = "") => {
+  const name = normalizeName(fileName);
+
+  // Filename is authoritative when it clearly declares the document purpose.
+  if (/costing|cost[_ -]?sheet|pricing|price|quotation|quote|commercial/.test(name)) {
+    return "pricing";
+  }
+  if (/financial|finance|payment|invoice|billing/.test(name)) {
+    return "finance";
+  }
+  if (/legal|contract|terms|compliance/.test(name)) {
+    return "legal";
+  }
+  if (/architecture|solution[_ -]?requirements?|technical|design/.test(name)) {
+    return "architecture";
+  }
+  if (/grammar|writing|language|style/.test(name)) {
+    return "grammar";
+  }
+  if (/context|scope|brief|overview/.test(name)) {
+    return "context";
+  }
+
+  return detectCategoryFromContent(content);
 };
 
 const isReferenceCandidate = (path) => {
@@ -560,6 +586,52 @@ const normalizeStringArray = (value, limit = 5) =>
         .slice(0, limit)
     : [];
 
+const normalizeConfidence = (value, fallback = 50) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  if (number >= 0 && number <= 1) return Math.round(number * 100);
+  if (number > 1 && number <= 5) return Math.round((number / 5) * 100);
+  return Math.round(clamp(number));
+};
+
+const unwrapCategoryResult = (parsed) => {
+  if (!parsed || typeof parsed !== "object") return null;
+  if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
+    return parsed.categories[0];
+  }
+  if (parsed.category && typeof parsed.category === "object") {
+    return parsed.category;
+  }
+  if (parsed.result && typeof parsed.result === "object") {
+    return parsed.result;
+  }
+  return parsed;
+};
+
+const validateCategoryOutput = (result, expectedKey) => {
+  const errors = [];
+  if (!result || typeof result !== "object") {
+    errors.push("Output is not an object.");
+    return { valid: false, errors };
+  }
+
+  const key = String(result.key || expectedKey).toLowerCase();
+  if (key !== expectedKey) {
+    errors.push(`Expected key "${expectedKey}" but received "${key}".`);
+  }
+
+  const score = Number(result.score);
+  if (!Number.isFinite(score) || score < 0 || score > 100) {
+    errors.push("Score must be a number between 0 and 100.");
+  }
+
+  if (!String(result.assessment || "").trim()) {
+    errors.push("Assessment is required.");
+  }
+
+  return { valid: errors.length === 0, errors };
+};
+
 const categorySystemPrompt = (packet) => [
   "You are ATHINA Commercial Proposal Validator.",
   "Return ONLY one valid JSON object. Do not use markdown or code fences.",
@@ -575,7 +647,7 @@ const categorySystemPrompt = (packet) => [
 ].join("\n");
 
 const validateCategoryPacket = async (packet) => {
-  const userPrompt = [
+  const baseUserPrompt = [
     `CATEGORY: ${packet.key}`,
     `LABEL: ${packet.label}`,
     `REFERENCE FILES: ${packet.files.map((file) => file.name).join(", ") || "None"}`,
@@ -585,23 +657,63 @@ const validateCategoryPacket = async (packet) => {
     packet.proposalExtract,
   ].join("\n\n");
 
-  const response = await callLLM({
-    messages: [
-      { role: "system", content: categorySystemPrompt(packet) },
-      { role: "user", content: userPrompt },
-    ],
-    temperature: 0.05,
-    maxTokens: 1100,
-    jsonMode: true,
-  });
+  let lastError = null;
 
-  const parsed =
-    typeof response === "string" ? safeJsonParse(response) : response;
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error(`ATHINA could not parse the ${packet.key} validation output.`);
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const repairInstruction =
+      attempt === 1
+        ? ""
+        : [
+            "IMPORTANT REPAIR INSTRUCTION:",
+            "The previous output was structurally invalid.",
+            `Return a top-level JSON object with key exactly "${packet.key}".`,
+            "score must be a numeric value from 0 to 100.",
+            "confidence must be either 0-100, 0-1, or 1-5.",
+            "assessment must be a non-empty string.",
+          ].join("\n");
+
+    const response = await callLLM({
+      messages: [
+        { role: "system", content: categorySystemPrompt(packet) },
+        {
+          role: "user",
+          content: [baseUserPrompt, repairInstruction].filter(Boolean).join("\n\n"),
+        },
+      ],
+      temperature: 0.05,
+      maxTokens: 1100,
+      jsonMode: true,
+    });
+
+    const parsed =
+      typeof response === "string" ? safeJsonParse(response) : response;
+    const candidate = unwrapCategoryResult(parsed);
+    const validation = validateCategoryOutput(candidate, packet.key);
+
+    if (validation.valid) {
+      return {
+        ...candidate,
+        key: packet.key,
+        score: Math.round(clamp(candidate.score)),
+        confidence: normalizeConfidence(
+          candidate.confidence,
+          packet.files.length > 0 ? 75 : 55
+        ),
+      };
+    }
+
+    lastError = validation.errors.join(" ");
+    console.warn("[VALIDATOR] Invalid category output", {
+      key: packet.key,
+      attempt,
+      errors: validation.errors,
+      receivedKeys: candidate && typeof candidate === "object"
+        ? Object.keys(candidate)
+        : [],
+    });
   }
 
-  return { ...parsed, key: packet.key };
+  throw new Error(`${packet.key} output remained invalid after retry: ${lastError}`);
 };
 
 const normalizeValidationResult = (
@@ -661,9 +773,9 @@ const normalizeValidationResult = (
       ),
       proposalEvidence: normalizeStringArray(match?.proposalEvidence, 4),
       referenceEvidence: normalizeStringArray(match?.referenceEvidence, 4),
-      confidence: clamp(
-        match?.confidence ||
-          (evidence.hasReferences ? 75 : 55)
+      confidence: normalizeConfidence(
+        match?.confidence,
+        evidence.hasReferences ? 75 : 55
       ),
       referenceCoverage: evidence.hasReferences
         ? "available"
@@ -732,14 +844,37 @@ const normalizeValidationResult = (
     ])
   ).slice(0, 12);
 
+  const failedCategories = categories.filter((category) => category.status === "fail");
+  const conditionalCategories = categories.filter(
+    (category) => category.status === "conditional"
+  );
+  const commercialFailureCount = (commercialChecks?.checks || []).filter(
+    (item) => item.status === "fail"
+  ).length;
+
+  const executiveSummary = unrelated
+    ? "The proposal appears materially unrelated to the supplied reference requirements and should not proceed under this scope."
+    : failedCategories.length > 0
+      ? `The proposal requires material rework in ${failedCategories
+          .map((item) => item.label)
+          .join(", ")}. ${commercialFailureCount > 0
+          ? `${commercialFailureCount} deterministic commercial reconciliation issue(s) were also identified.`
+          : ""}`.trim()
+      : conditionalCategories.length > 0
+        ? `The proposal is substantially aligned but requires attention in ${conditionalCategories
+            .map((item) => item.label)
+            .join(", ")}. ${commercialFailureCount > 0
+            ? `${commercialFailureCount} deterministic commercial reconciliation issue(s) require correction.`
+            : ""}`.trim()
+        : commercialFailureCount > 0
+          ? `The proposal demonstrates strong alignment with the supplied requirements, but ${commercialFailureCount} deterministic commercial reconciliation issue(s) require correction.`
+          : "The proposal demonstrates strong alignment with the supplied legal, financial, commercial, contextual, and technical requirements.";
+
   return {
-    summary:
-      unrelated
-        ? "The proposal appears materially unrelated to the supplied reference requirements and should not proceed under this scope."
-        : String(result?.summary || "Validation completed.").trim(),
+    summary: executiveSummary,
     overallScore: clamp(weightedScore),
     decision,
-    confidence: clamp(result?.confidence || 70),
+    confidence: normalizeConfidence(result?.confidence, 70),
     hardGateFailures,
     missingItems,
     proposalDiagnostics: diagnostics,
@@ -1061,7 +1196,7 @@ export const validateProposalUpload = async ({
     summary: "Category-by-category proposal validation completed.",
     confidence: Math.round(
       categoryResults.reduce(
-        (sum, item) => sum + clamp(item.confidence || 0),
+        (sum, item) => sum + normalizeConfidence(item.confidence, 50),
         0
       ) / categoryResults.length
     ),
