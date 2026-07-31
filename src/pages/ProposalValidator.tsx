@@ -256,7 +256,7 @@ const ProposalValidator = () => {
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-emerald-400/25 bg-emerald-500/[0.05] px-6 py-12 text-center transition hover:border-emerald-300/40 hover:bg-emerald-500/[0.08]">
                   <Upload className="mb-4 h-8 w-8 text-emerald-300" />
                   <span className="text-sm font-medium text-white">Choose a commercial proposal file</span>
-                  <span className="mt-2 text-xs text-emerald-100/60">The file is sent to ATHINA for review and archived in Supabase storage.</span>
+                  <span className="mt-2 text-xs text-emerald-100/60">The file is sent to ATHINA for review and archived in storage.</span>
                   <input
                     type="file"
                     className="hidden"
