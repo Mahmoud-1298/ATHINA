@@ -1,7 +1,16 @@
 import { safeJsonParse } from "./helpers.js";
 
-const PRIMARY_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free";
-const FALLBACK_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+const PRIMARY_MODEL =
+  process.env.ATHINA_PRIMARY_MODEL ||
+  process.env.OPENROUTER_MODEL ||
+  "openai/gpt-oss-20b";
+
+const FALLBACK_MODELS = (process.env.ATHINA_FALLBACK_MODELS || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+const FALLBACK_MODEL = FALLBACK_MODELS[0] || "google/gemini-2.5-flash-lite";
 const DEFAULT_MODEL = PRIMARY_MODEL;
 const RESPONSE_CACHE = new Map();
 const CACHE_TTL_MS = Number(process.env.LLM_CACHE_TTL_MS) || 5 * 60 * 1000;
@@ -150,28 +159,81 @@ const tryModel = async (model, messages, temperature, maxTokens, jsonMode) => {
 
 export const callLLM = async ({ messages, model, temperature = 0.3, maxTokens = 4000, jsonMode = false }) => {
   const primaryModel = model || PRIMARY_MODEL;
-  const cacheKey = getCacheKey({ model: primaryModel, messages, temperature, maxTokens, jsonMode });
-  const cached = getCachedResponse(cacheKey);
-  if (cached !== null) return cached;
+  const modelChain = [
+    primaryModel,
+    ...FALLBACK_MODELS.filter((candidate) => candidate !== primaryModel),
+  ];
 
-  try {
-    const result = await tryModel(primaryModel, messages, temperature, maxTokens, jsonMode);
-    setCachedResponse(cacheKey, result);
-    return result;
-  } catch (primaryError) {
-    if (primaryModel === FALLBACK_MODEL) throw primaryError;
-    console.warn("[LLM] Primary model \"" + primaryModel + "\" failed: " + primaryError.message + ". Falling back to \"" + FALLBACK_MODEL + "\".");
+  const failures = [];
+
+  for (const candidate of modelChain) {
+    const cacheKey = getCacheKey({
+      model: candidate,
+      messages,
+      temperature,
+      maxTokens,
+      jsonMode,
+    });
+
+    const cached = getCachedResponse(cacheKey);
+    if (cached !== null) return cached;
+
     try {
-      const fallbackCacheKey = getCacheKey({ model: FALLBACK_MODEL, messages, temperature, maxTokens, jsonMode });
-      const fallbackCached = getCachedResponse(fallbackCacheKey);
-      if (fallbackCached !== null) return fallbackCached;
-      const result = await tryGeminiModel(FALLBACK_MODEL, messages, temperature, maxTokens, jsonMode);
-      setCachedResponse(fallbackCacheKey, result);
+      const result = await tryModel(
+        candidate,
+        messages,
+        temperature,
+        maxTokens,
+        jsonMode
+      );
+
+      setCachedResponse(cacheKey, result);
       return result;
-    } catch (fallbackError) {
-      throw new Error("Both primary (" + primaryModel + ") and fallback (" + FALLBACK_MODEL + ") models failed. Primary: " + primaryError.message + " | Fallback: " + fallbackError.message);
+    } catch (error) {
+      failures.push(`${candidate}: ${error.message}`);
+      console.warn(
+        `[LLM] Model "${candidate}" failed. Trying next fallback.`,
+        error.message
+      );
     }
   }
+
+  if (GEMINI_API_KEY) {
+    try {
+      const directGeminiModel =
+        process.env.GEMINI_MODEL ||
+        process.env.Gemini_API_Model ||
+        "gemini-2.5-flash-lite";
+
+      const cacheKey = getCacheKey({
+        model: `direct-gemini:${directGeminiModel}`,
+        messages,
+        temperature,
+        maxTokens,
+        jsonMode,
+      });
+
+      const cached = getCachedResponse(cacheKey);
+      if (cached !== null) return cached;
+
+      const result = await tryGeminiModel(
+        directGeminiModel,
+        messages,
+        temperature,
+        maxTokens,
+        jsonMode
+      );
+
+      setCachedResponse(cacheKey, result);
+      return result;
+    } catch (error) {
+      failures.push(`direct-gemini: ${error.message}`);
+    }
+  }
+
+  throw new Error(
+    "All configured LLM models failed. " + failures.join(" | ")
+  );
 };
 
 export { PRIMARY_MODEL, FALLBACK_MODEL, DEFAULT_MODEL };

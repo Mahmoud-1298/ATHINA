@@ -25,7 +25,7 @@ export default function VoiceStatusIndicator({ state, interimText }) {
   const configs = {
     wake: {
       icon: Radio,
-      label: 'Listening for "Hi ATHINA"',
+      label: 'Listening for "ATHINA"',
       color: 'cyan',
       bg: 'bg-cyan-500/5',
       border: 'border-cyan-500/20',

@@ -22,6 +22,28 @@ const ATHINA_SYSTEM_PROMPT = [
   "You speak like a highly experienced executive assistant combined with an elite technical consultant. Your responses should feel effortless. Never overwhelm the user. Prefer clarity over complexity.",
 ].join("\n");
 
+const summarizeExecution = (executed = []) => {
+  const summary = {
+    total: executed.length,
+    success: 0,
+    failed: 0,
+    skipped: 0,
+  };
+
+  for (const task of executed) {
+    const result = task?.result || {};
+    if (result.skipped) {
+      summary.skipped += 1;
+    } else if (result.success) {
+      summary.success += 1;
+    } else {
+      summary.failed += 1;
+    }
+  }
+
+  return summary;
+};
+
 const normalizeMessage = (message) =>
   String(message || "")
     .toLowerCase()
@@ -74,6 +96,8 @@ export const buildCompactExecutionReply = async (executed) => {
     return "I'm here. How can I help?";
   }
 
+  const execution = summarizeExecution(executed);
+
   const resultsSummary = executed.map((task) => {
     const result = task.result || {};
     if (!result.success) {
@@ -102,8 +126,25 @@ export const buildCompactExecutionReply = async (executed) => {
   }).join("\n");
 
   const messages = [
-    { role: "system", content: ATHINA_SYSTEM_PROMPT + "\n\nBased on the execution results below, respond to the user naturally and concisely. Report what you accomplished in a conversational, human-like manner. Don't mention being an AI." },
-    { role: "user", content: "Execution results:\n" + resultsSummary }
+    {
+      role: "system",
+      content:
+        ATHINA_SYSTEM_PROMPT +
+        "\n\nBased on execution results, reply in 2-4 short sentences. " +
+        "If tasks are partially failed, clearly say what succeeded and what still needs user input or retry. " +
+        "Do not output markdown bullets. Do not mention internal task IDs.",
+    },
+    {
+      role: "user",
+      content:
+        "Execution summary:\n" +
+        `- Total tasks: ${execution.total}\n` +
+        `- Successful: ${execution.success}\n` +
+        `- Failed: ${execution.failed}\n` +
+        `- Skipped: ${execution.skipped}\n\n` +
+        "Execution details:\n" +
+        resultsSummary,
+    }
   ];
 
   try {

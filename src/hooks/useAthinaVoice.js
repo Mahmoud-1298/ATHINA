@@ -1,36 +1,59 @@
-import { useState, useRef, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invokeFunction } from '@/lib/functionApi';
 
-const AGENT_ID = 'agent_3301kt6djmwmet7tp8n2jjs9f3f5';
+const WAKE_WORD_PATTERN = /\b(hey\s+)?athina\b/i;
+const END_OF_SPEECH_MS = 700;
+
+const getSpeechRecognitionCtor = () =>
+  window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
 export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled = true }) {
-  const [connected, setConnected] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
-  const [listening, setListening] = useState(false);
   const [wakeMode, setWakeMode] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const [interimText, setInterimText] = useState('');
   const [voiceSupported] = useState(() => {
     if (typeof window === 'undefined') return false;
-    return !!window.WebSocket && !!navigator.mediaDevices?.getUserMedia;
+    return Boolean(getSpeechRecognitionCtor()) && Boolean(window.AudioContext || window.webkitAudioContext);
   });
 
-  const wsRef = useRef(null);
-  const micStreamRef = useRef(null);
-  const micCtxRef = useRef(null);
-  const micProcessorRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const shouldKeepListeningRef = useRef(false);
+  const utteranceStartedRef = useRef(false);
+  const utteranceBufferRef = useRef('');
+  const silenceTimerRef = useRef(null);
+  const ignoreInputRef = useRef(false);
+
   const playbackCtxRef = useRef(null);
   const audioQueueRef = useRef([]);
   const isPlayingRef = useRef(false);
   const currentSourceRef = useRef(null);
-  const sampleRateRef = useRef(16000);
-  const wakeModeRef = useRef(false);
+
   const onUserTranscriptRef = useRef(onUserTranscript);
   const onAgentResponseRef = useRef(onAgentResponse);
 
-  useEffect(() => { onUserTranscriptRef.current = onUserTranscript; });
-  useEffect(() => { onAgentResponseRef.current = onAgentResponse; });
+  useEffect(() => {
+    onUserTranscriptRef.current = onUserTranscript;
+  }, [onUserTranscript]);
 
-  // === Audio playback (agent → user) ===
+  useEffect(() => {
+    onAgentResponseRef.current = onAgentResponse;
+  }, [onAgentResponse]);
+
+  const clearSilenceTimer = () => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  };
+
+  const resetUtterance = () => {
+    utteranceStartedRef.current = false;
+    utteranceBufferRef.current = '';
+    setInterimText('');
+    clearSilenceTimer();
+  };
+
   const ensurePlaybackCtx = () => {
     if (!playbackCtxRef.current) {
       playbackCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -41,48 +64,148 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     return playbackCtxRef.current;
   };
 
+  const startRecognition = () => {
+    if (!voiceEnabled || !voiceSupported || !shouldKeepListeningRef.current) return;
+    if (ignoreInputRef.current) return;
+    if (recognitionRef.current) return;
+
+    const RecognitionCtor = getSpeechRecognitionCtor();
+    if (!RecognitionCtor) return;
+
+    const recognition = new RecognitionCtor();
+    recognition.lang = 'en-US';
+    recognition.interimResults = true;
+    recognition.continuous = true;
+
+    recognition.onresult = (event) => {
+      if (!shouldKeepListeningRef.current || ignoreInputRef.current) return;
+
+      let finalText = '';
+      let latestInterim = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const transcript = String(result?.[0]?.transcript || '').trim();
+        if (!transcript) continue;
+
+        if (result.isFinal) {
+          finalText += ` ${transcript}`;
+        } else {
+          latestInterim = transcript;
+        }
+      }
+
+      const combinedText = `${utteranceBufferRef.current} ${finalText} ${latestInterim}`.trim();
+      if (!combinedText) return;
+
+      if (!utteranceStartedRef.current) {
+        const wakeMatch = combinedText.match(WAKE_WORD_PATTERN);
+        if (!wakeMatch) {
+          setInterimText('');
+          return;
+        }
+
+        utteranceStartedRef.current = true;
+        setListening(true);
+
+        const afterWake = combinedText.slice(wakeMatch.index + wakeMatch[0].length).trim();
+        utteranceBufferRef.current = afterWake;
+        setInterimText(afterWake);
+      } else {
+        const updatedText = `${utteranceBufferRef.current} ${finalText} ${latestInterim}`.trim();
+        utteranceBufferRef.current = updatedText;
+        setInterimText(updatedText);
+      }
+
+      clearSilenceTimer();
+      silenceTimerRef.current = setTimeout(async () => {
+        const transcript = utteranceBufferRef.current.trim();
+        resetUtterance();
+
+        if (!transcript || ignoreInputRef.current || !shouldKeepListeningRef.current) {
+          setListening(false);
+          return;
+        }
+
+        ignoreInputRef.current = true;
+        setListening(false);
+
+        try {
+          await Promise.resolve(onUserTranscriptRef.current?.(transcript));
+        } finally {
+          ignoreInputRef.current = false;
+          if (shouldKeepListeningRef.current && !speaking) {
+            startRecognition();
+          }
+        }
+      }, END_OF_SPEECH_MS);
+    };
+
+    recognition.onerror = () => {
+      recognitionRef.current = null;
+      setListening(false);
+      if (shouldKeepListeningRef.current && !ignoreInputRef.current) {
+        setTimeout(startRecognition, 250);
+      }
+    };
+
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setListening(false);
+      if (shouldKeepListeningRef.current && !ignoreInputRef.current) {
+        setTimeout(startRecognition, 120);
+      }
+    };
+
+    recognitionRef.current = recognition;
+
+    try {
+      recognition.start();
+    } catch {
+      recognitionRef.current = null;
+      setListening(false);
+    }
+  };
+
+  const stopRecognition = () => {
+    clearSilenceTimer();
+    resetUtterance();
+
+    if (recognitionRef.current) {
+      const recognition = recognitionRef.current;
+      recognitionRef.current = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try {
+        recognition.abort?.();
+        recognition.stop();
+      } catch {
+        // no-op
+      }
+    }
+
+    setListening(false);
+    setInterimText('');
+  };
+
   const stopPlayback = () => {
     if (currentSourceRef.current) {
       try {
         currentSourceRef.current.onended = null;
         currentSourceRef.current.stop();
-      } catch (e) {}
+      } catch {
+        // no-op
+      }
       currentSourceRef.current = null;
     }
+
     audioQueueRef.current = [];
     isPlayingRef.current = false;
     setSpeaking(false);
-  };
 
-  // Play an MP3 audio (base64-encoded) returned by voiceSynthesis
-  const playMp3Base64 = async (base64Audio) => {
-    try {
-      const ctx = ensurePlaybackCtx();
-      const binary = atob(base64Audio);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const audioBuffer = await ctx.decodeAudioData(bytes.buffer);
-      audioQueueRef.current.push(audioBuffer);
-      if (!isPlayingRef.current) playNextAudio();
-    } catch (e) {
-      console.warn('MP3 playback error:', e);
-    }
-  };
-
-  // Speak clean text via voiceSynthesis (bypasses ElevenLabs' LLM entirely)
-  const speakText = async (text) => {
-    if (!text || !text.trim()) return;
-    setSpeaking(true);
-    try {
-      const res = await invokeFunction('voiceSynthesis', { text });
-      if (res.data?.audio) {
-        await playMp3Base64(res.data.audio);
-      } else {
-        setSpeaking(false);
-      }
-    } catch (e) {
-      console.warn('speakText error:', e);
-      setSpeaking(false);
+    if (shouldKeepListeningRef.current) {
+      startRecognition();
     }
   };
 
@@ -90,8 +213,12 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     if (audioQueueRef.current.length === 0) {
       isPlayingRef.current = false;
       setSpeaking(false);
+      if (shouldKeepListeningRef.current) {
+        startRecognition();
+      }
       return;
     }
+
     const ctx = ensurePlaybackCtx();
     const buffer = audioQueueRef.current.shift();
     const source = ctx.createBufferSource();
@@ -100,227 +227,83 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     currentSourceRef.current = source;
     isPlayingRef.current = true;
     setSpeaking(true);
+
     source.onended = () => {
       currentSourceRef.current = null;
       playNextAudio();
     };
+
     source.start();
   };
 
-  // === Microphone streaming (user → agent) ===
-  const startMicStreaming = async () => {
+  const playMp3Base64 = async (base64Audio) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      micStreamRef.current = stream;
+      stopRecognition();
+      const ctx = ensurePlaybackCtx();
+      const binary = atob(base64Audio);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
-      let ctx;
-      try {
-        ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-      } catch (e) {
-        ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const decoded = await ctx.decodeAudioData(bytes.buffer.slice(0));
+      audioQueueRef.current.push(decoded);
+
+      if (!isPlayingRef.current) {
+        playNextAudio();
       }
-      micCtxRef.current = ctx;
-      if (ctx.state === 'suspended') await ctx.resume();
-
-      const source = ctx.createMediaStreamSource(stream);
-      const processor = ctx.createScriptProcessor(4096, 1, 1);
-
-      processor.onaudioprocess = (e) => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        const input = e.inputBuffer.getChannelData(0);
-        const actualRate = ctx.sampleRate;
-        const targetRate = 16000;
-
-        let pcm16;
-        if (actualRate === targetRate) {
-          pcm16 = new Int16Array(input.length);
-          for (let i = 0; i < input.length; i++) {
-            const s = Math.max(-1, Math.min(1, input[i]));
-            pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-          }
-        } else {
-          const ratio = actualRate / targetRate;
-          const targetLength = Math.floor(input.length / ratio);
-          pcm16 = new Int16Array(targetLength);
-          for (let i = 0; i < targetLength; i++) {
-            const sourceIndex = Math.floor(i * ratio);
-            const s = Math.max(-1, Math.min(1, input[sourceIndex]));
-            pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-          }
-        }
-
-        const bytes = new Uint8Array(pcm16.buffer);
-        let binary = '';
-        const chunkSize = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-          const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-          binary += String.fromCharCode.apply(null, chunk);
-        }
-        const base64 = btoa(binary);
-        try {
-          wsRef.current.send(JSON.stringify({ user_audio_chunk: base64 }));
-        } catch (err) {}
-      };
-
-      source.connect(processor);
-      processor.connect(ctx.destination);
-      micProcessorRef.current = processor;
-      setListening(true);
-    } catch (e) {
-      console.error('Mic streaming failed:', e);
+    } catch (error) {
+      setSpeaking(false);
+      if (shouldKeepListeningRef.current) {
+        startRecognition();
+      }
+      console.warn('ATHINA voice playback failed:', error);
     }
   };
 
-  const stopMicStreaming = () => {
-    if (micProcessorRef.current) {
-      try { micProcessorRef.current.disconnect(); } catch (e) {}
-      micProcessorRef.current = null;
+  const speakText = async (text) => {
+    if (!String(text || '').trim()) return;
+
+    try {
+      const res = await invokeFunction('voiceSynthesis', { text });
+      if (res.data?.audio) {
+        await playMp3Base64(res.data.audio);
+      }
+    } catch (error) {
+      console.warn('ATHINA TTS failed:', error);
+      if (shouldKeepListeningRef.current) {
+        startRecognition();
+      }
     }
-    if (micStreamRef.current) {
-      micStreamRef.current.getTracks().forEach((t) => t.stop());
-      micStreamRef.current = null;
-    }
-    if (micCtxRef.current) {
-      try { micCtxRef.current.close(); } catch (e) {}
-      micCtxRef.current = null;
-    }
-    setListening(false);
   };
 
-  // === WebSocket connection ===
-  const connect = async () => {
-    try {
-      let wsUrl = null;
-
-      // Try signed URL first (for private agents with auth enabled)
-      try {
-        const res = await invokeFunction('elevenLabsSignedUrl', {});
-        wsUrl = res.data?.signed_url;
-      } catch (e) {
-        console.warn('Signed URL failed, trying direct connection');
-      }
-
-      // Fallback: direct connection for public agents
-      if (!wsUrl) {
-        wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${AGENT_ID}`;
-      }
-
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        setConnected(true);
-        setWakeMode(true);
-        wakeModeRef.current = true;
-        ws.send(JSON.stringify({ type: 'conversation_initiation_client_data' }));
-        startMicStreaming();
-      };
-
-      ws.onmessage = (event) => {
-        let data;
-        try {
-          data = JSON.parse(event.data);
-        } catch (e) {
-          return;
-        }
-
-        switch (data.type) {
-          case 'conversation_initiation_metadata': {
-            const meta = data.conversation_initiation_metadata_event;
-            const format = meta?.agent_output_audio_format;
-            if (format) {
-              const match = format.match(/(\d+)/);
-              if (match) sampleRateRef.current = parseInt(match[1]);
-            } else if (meta?.output_sample_rate) {
-              sampleRateRef.current = meta.output_sample_rate;
-            }
-            break;
-          }
-
-          case 'user_transcript': {
-            const transcript = data.user_transcription_event?.user_transcript;
-            if (transcript) onUserTranscriptRef.current?.(transcript);
-            break;
-          }
-
-          // agent_response and audio events from ElevenLabs are intentionally ignored.
-          // ElevenLabs' LLM (Gemma) leaks reasoning into its text/audio.
-          // We use athinaAgent (clean reply) + voiceSynthesis (TTS) instead.
-
-          case 'interruption': {
-            // ElevenLabs detected user speech — stop agent audio immediately
-            stopPlayback();
-            break;
-          }
-
-          case 'ping': {
-            const pingEvent = data.ping_event;
-            if (pingEvent) {
-              setTimeout(() => {
-                if (wsRef.current?.readyState === WebSocket.OPEN) {
-                  try {
-                    wsRef.current.send(
-                      JSON.stringify({ type: 'pong', event_id: pingEvent.event_id })
-                    );
-                  } catch (e) {}
-                }
-              }, pingEvent.ping_ms || 0);
-            }
-            break;
-          }
-        }
-      };
-
-      ws.onclose = () => {
-        wsRef.current = null;
-        setConnected(false);
-        setWakeMode(false);
-        wakeModeRef.current = false;
-        stopMicStreaming();
-        stopPlayback();
-      };
-
-      ws.onerror = () => {
-        console.error('WebSocket error');
-      };
-    } catch (e) {
-      console.error('Connection failed:', e);
-      setWakeMode(false);
-      wakeModeRef.current = false;
-    }
+  const connect = () => {
+    if (!voiceEnabled || !voiceSupported) return;
+    shouldKeepListeningRef.current = true;
+    setWakeMode(true);
+    startRecognition();
   };
 
   const disconnect = () => {
-    if (wsRef.current) {
-      try { wsRef.current.close(); } catch (e) {}
-      wsRef.current = null;
-    }
-    stopMicStreaming();
-    stopPlayback();
-    setConnected(false);
+    shouldKeepListeningRef.current = false;
     setWakeMode(false);
-    wakeModeRef.current = false;
-    setSpeaking(false);
-    setListening(false);
+    stopRecognition();
+    stopPlayback();
   };
 
   const toggleWakeMode = () => {
-    if (wakeModeRef.current) {
+    if (wakeMode) {
       disconnect();
     } else {
       connect();
     }
   };
 
-  const stopVoice = () => {
-    stopPlayback();
-  };
-
   useEffect(() => {
     return () => {
       disconnect();
+      if (playbackCtxRef.current) {
+        playbackCtxRef.current.close().catch(() => {});
+        playbackCtxRef.current = null;
+      }
     };
   }, []);
 
@@ -331,12 +314,16 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     interimText,
     voiceSupported,
     startListening: toggleWakeMode,
-    resumeListening: () => {},
-    stopListening: () => {},
+    resumeListening: () => {
+      if (wakeMode) startRecognition();
+    },
+    stopListening: () => {
+      stopRecognition();
+    },
     toggleWakeMode,
     playVoice: () => {},
     playAudioBase64: playMp3Base64,
-    stopVoice,
+    stopVoice: stopPlayback,
     speakText,
   };
 }

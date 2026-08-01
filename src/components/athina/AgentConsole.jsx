@@ -226,6 +226,8 @@ export default function AgentConsole({ onActions, onAvatarState }) {
         })
         .catch(() => null)
         .finally(() => setLoading(false));
+
+      return voiceActionPromiseRef.current;
     },
     // No onAgentResponse — ElevenLabs' LLM output is ignored entirely
     voiceEnabled: true,

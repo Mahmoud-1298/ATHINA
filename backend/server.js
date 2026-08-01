@@ -197,6 +197,7 @@ const synthesizeSpeech = async (text) => {
   const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
   const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || "lxYfHSkYm1EzQzGhdbfc";
   const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5";
+  const elevenLabsLatencyMode = Number(process.env.ELEVENLABS_LATENCY_MODE || 3);
 
   if (!elevenLabsKey) {
     console.error("[TTS] ELEVENLABS_API_KEY is not set");
@@ -216,7 +217,7 @@ const synthesizeSpeech = async (text) => {
   );
 
   const ttsResponse = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoiceId}`,
+    `https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoiceId}?optimize_streaming_latency=${encodeURIComponent(elevenLabsLatencyMode)}`,
     {
       method: "POST",
       headers: {
@@ -226,8 +227,9 @@ const synthesizeSpeech = async (text) => {
       body: JSON.stringify({
         text: normalizedText,
         model_id: elevenLabsModelId,
+        output_format: "mp3_22050_32",
         voice_settings: {
-          stability: 0.5,
+          stability: 0.35,
           similarity_boost: 0.75,
           use_speaker_boost: true,
         },

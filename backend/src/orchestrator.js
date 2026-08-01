@@ -1710,6 +1710,9 @@ export const orchestrate = async ({
       planResult.reply ||
       "I am here. How can I help?";
 
+    const planningFailed =
+      planResult.planningFailed === true;
+
     await saveTurn(
       sessionId,
       normalizedMessage,
@@ -1727,11 +1730,12 @@ export const orchestrate = async ({
     });
 
     return {
-      success: true,
+      success: !planningFailed,
       reply,
       actions: [],
       sessionId,
       timestamp: timestamp(),
+      planningFailed,
     };
   }
 
@@ -1792,7 +1796,7 @@ export const orchestrate = async ({
     }))
   );
 
-  const { executed } = await executeTasks(
+  const { executed, summary } = await executeTasks(
     tasks,
     {
       saveTaskResult: (
@@ -1845,7 +1849,7 @@ export const orchestrate = async ({
   });
 
   return {
-    success: true,
+    success: Boolean(summary?.success),
     reply: finalReply,
     actions,
     sessionId,

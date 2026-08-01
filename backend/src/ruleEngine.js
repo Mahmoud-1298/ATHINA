@@ -1,3 +1,5 @@
+import { getToolSchemas } from "./tools/index.js";
+
 const UNSAFE_PATTERNS = [
   /\b(hack|exploit|malware|phishing|ransomware)\b/i,
   /\b(illegal drug|weapon|firearm)\b/i,
@@ -5,18 +7,23 @@ const UNSAFE_PATTERNS = [
   /\b(bomb|terror|kill|harm)\b/i,
 ];
 
-const VALID_TOOLS = new Set([
-  "llm",
-  "web_search",
-  "maps",
-  "email",
-  "calendar",
-  "booking",
-]);
+const getValidTools = () =>
+  new Set(
+    getToolSchemas()
+      .map((schema) => String(schema?.name || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
 
 const VALID_ACTIONS = {
-  email: new Set(["send", "list", "read"]),
-  calendar: new Set(["create_event", "list_events", "check_availability", "ensure_slot"]),
+  email: new Set(["send", "list", "read", "draft", "reply", "forward"]),
+  calendar: new Set([
+    "create_event",
+    "list_events",
+    "check_availability",
+    "ensure_slot",
+    "update_event",
+    "delete_event",
+  ]),
 };
 
 const containsUnsafeContent = (value) => {
@@ -100,6 +107,7 @@ const validateCalendarTask = (task, violations) => {
 
 export const validateTasks = (tasks) => {
   const violations = [];
+  const validTools = getValidTools();
 
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return { valid: false, violations: ["No tasks to execute."] };
@@ -117,7 +125,7 @@ export const validateTasks = (tasks) => {
     if (ids.has(task.id)) violations.push(`Duplicate task id: ${task.id}.`);
     ids.add(task.id);
 
-    if (!VALID_TOOLS.has(task.tool)) {
+    if (!validTools.has(task.tool)) {
       violations.push(`Invalid tool: ${task.tool}.`);
       continue;
     }
