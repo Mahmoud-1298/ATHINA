@@ -221,6 +221,53 @@ const tokenizeImportantTerms = (text, limit = 1600) => {
   return new Set(tokens.slice(0, limit));
 };
 
+const extractProposalIdentity = (fileName, proposalText) => {
+  const normalizedName = String(fileName || "")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[_-]+/g, " ")
+    .trim();
+  const introText = String(proposalText || "")
+    .split(/\n{2,}/)
+    .find((part) => part.trim().length >= 40) || String(proposalText || "");
+
+  return {
+    name: normalizedName,
+    nameTerms: tokenizeImportantTerms(normalizedName, 120),
+    contextTerms: tokenizeImportantTerms(introText, 220),
+    contextPreview: trimForPrompt(introText, 1800),
+  };
+};
+
+export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles = []) => {
+  const identity = extractProposalIdentity(fileName, proposalText);
+  const referenceText = (referenceFiles || [])
+    .map((file) => `${file.name || ""}\n${file.content || ""}`)
+    .join("\n\n");
+  const referenceTerms = tokenizeImportantTerms(referenceText, 2400);
+
+  const nameOverlap = overlapRatio(identity.nameTerms, referenceTerms);
+  const contextOverlap = overlapRatio(identity.contextTerms, referenceTerms);
+  const combinedOverlap = (nameOverlap + contextOverlap) / 2;
+  const hasMeaningfulName = identity.nameTerms.size > 0;
+  const hasMeaningfulContext = identity.contextTerms.size > 0;
+  const isRelevant =
+    (hasMeaningfulName && nameOverlap >= 0.08) ||
+    (hasMeaningfulContext && contextOverlap >= 0.08) ||
+    (hasMeaningfulName && hasMeaningfulContext && combinedOverlap >= 0.1);
+
+  return {
+    isRelevant,
+    nameOverlap,
+    contextOverlap,
+    combinedOverlap,
+    reason: isRelevant
+      ? null
+      : "The proposal name and context do not align with the supplied reference files, so the proposal appears unrelated to the requested scope.",
+    proposalName: identity.name,
+    contextPreview: identity.contextPreview,
+  };
+};
+
 const normalizeNumberToken = (value) =>
   String(value || "")
     .toLowerCase()
@@ -1216,6 +1263,65 @@ export const validateProposalUpload = async ({
 
   const diagnostics = buildProposalDiagnostics(proposalText);
   const commercialChecks = extractCommercialChecks(proposalText);
+  const relevanceGate = evaluateProposalRelevance(fileName, proposalText, referenceFiles);
+
+  if (!relevanceGate.isRelevant) {
+    const fallbackResult = normalizeValidationResult(
+      {
+        summary: relevanceGate.reason,
+        confidence: 0,
+        missingItems: [relevanceGate.reason],
+        categories: CATEGORIES.map((category) => ({
+          key: category.key,
+          score: 0,
+          achieved: "No relevant overlap with the reference material was detected.",
+          assessment: `The proposal name/context did not match the reference requirements for ${category.label}.`,
+          strengths: [],
+          issues: [relevanceGate.reason],
+          recommendations: ["Align the proposal title and opening context with the supplied reference scope before resubmitting."],
+          referencesUsed: [],
+        })),
+      },
+      referenceFiles,
+      proposalText,
+      diagnostics,
+      commercialChecks
+    );
+
+    fallbackResult.summary = relevanceGate.reason;
+    fallbackResult.overallScore = 0;
+    fallbackResult.decision = "rejected_unrelated";
+    fallbackResult.missingItems = [relevanceGate.reason];
+    fallbackResult.categories = fallbackResult.categories.map((category) => ({
+      ...category,
+      score: 0,
+      status: "fail",
+      assessment: `The proposal name/context did not match the reference requirements for ${category.label}.`,
+      issues: [relevanceGate.reason],
+    }));
+
+    const reportId = await saveValidationReport({
+      sessionId,
+      userId,
+      fileName,
+      proposalStoragePath,
+      result: fallbackResult,
+    });
+
+    return {
+      success: true,
+      reportId,
+      proposalName: fileName,
+      proposalStoragePath,
+      referenceFiles: referenceFiles.map((file) => ({
+        name: file.name,
+        path: file.path,
+        category: file.category,
+      })),
+      result: fallbackResult,
+    };
+  }
+
   const packets = buildCategoryPackets(referenceFiles, proposalText);
 
   console.log("[VALIDATOR] Starting category validation", {
