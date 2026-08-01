@@ -50,6 +50,25 @@ const extractEmailAddressFromHeader = (header = "") => {
 };
 
 const buildDeterministicExecutionReply = (executed = []) => {
+  const missingInfoFailure = executed.find(
+    (task) =>
+      task?.result?.success === false &&
+      Array.isArray(task?.result?.missingFields) &&
+      task.result.missingFields.length > 0
+  );
+
+  if (missingInfoFailure) {
+    const result = missingInfoFailure.result;
+    const fields = result.missingFields.join(", ");
+    if (result.type === "calendar") {
+      return `I can do that, but I still need: ${fields}. Please share those details and I’ll complete it immediately.`;
+    }
+    if (result.type === "email") {
+      return `I’m ready to send it, but I still need: ${fields}.`;
+    }
+    return `I need a few more details before I can continue: ${fields}.`;
+  }
+
   const successfulEmailRead = executed.find(
     (task) =>
       task?.result?.success === true &&

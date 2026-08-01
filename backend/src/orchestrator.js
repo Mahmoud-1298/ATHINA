@@ -14,7 +14,10 @@ import {
 
 import { plan } from "./planner.js";
 import { execute as executeTasks } from "./executionEngine.js";
-import { executeTool } from "./tools/index.js";
+import {
+  executeTool,
+  getToolActionPolicy,
+} from "./tools/index.js";
 import {
   validateTasks,
   checkSafety,
@@ -130,7 +133,7 @@ const hasExplicitMeetingIntent = (message) =>
  * References to details supplied earlier in an active workflow.
  */
 const isReferenceToPriorDetails = (message) =>
-  /\b(already said|mentioned above|details above|previous details|same details|same time|same date|same attendee|same attendees|that one|use that|as said|as mentioned)\b/i.test(
+  /\b(already said|already above|mentioned above|details above|previous details|same details|same time|same date|same attendee|same attendees|that one|use that|as said|as mentioned|i told you|told you already|told you above)\b/i.test(
     String(message || "")
   );
 
@@ -141,6 +144,45 @@ const isActionOrLiveDataRequest = (message) =>
   /\b(send|write|draft|compose|reply|forward|create|update|edit|modify|delete|remove|schedule|book|cancel|read|open|latest|current|check|summarize my|summarise my|list my|find my|search my)\b/i.test(
     String(message || "")
   );
+
+const isVagueAcknowledgement = (
+  message
+) =>
+  /^\s*(ok|okay|alright|sure|yes|yep|yeah|i told you already above|as mentioned|same as above)\s*!*\s*$/i.test(
+    String(message || "")
+  );
+
+const hasExplicitWriteConfirmation = (
+  message
+) =>
+  /\b(yes|yep|confirm|confirmed|go ahead|proceed|do it|create it|schedule it|book it|send it|add it|make it)\b/i.test(
+    String(message || "")
+  );
+
+const hasExplicitWriteIntent = (
+  message
+) =>
+  /\b(send|create|schedule|book|add|set up|setup|arrange|organize|organise|update|delete|remove|cancel)\b/i.test(
+    String(message || "")
+  );
+
+const isWriteTask = (task) => {
+  const action = String(
+    task?.params?.action || "default"
+  )
+    .trim()
+    .toLowerCase();
+
+  const policy = getToolActionPolicy(
+    task?.tool,
+    action
+  );
+
+  return (
+    policy.risk === "write" ||
+    policy.risk === "high"
+  );
+};
 
 /* =========================================================
    EMAIL EXTRACTION
@@ -165,16 +207,30 @@ const extractEmails = (message) => {
    ========================================================= */
 
 const parseMonthDate = (message, existingStart = null) => {
-  const match = String(message || "").match(
+  const text = String(message || "");
+
+  const monthDayMatch = text.match(
     /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i
   );
+
+  const dayMonthMatch = text.match(
+    /\b(\d{1,2})(?:st|nd|rd|th)?\s+(january|february|march|april|may|june|july|august|september|october|november|december)(?:,?\s+(\d{4}))?\b/i
+  );
+
+  const match = monthDayMatch || dayMonthMatch;
 
   if (!match) {
     return existingStart ? new Date(existingStart) : null;
   }
 
-  const month = MONTH_INDEX[match[1].toLowerCase()];
-  const day = Number(match[2]);
+  const month = monthDayMatch
+    ? MONTH_INDEX[match[1].toLowerCase()]
+    : MONTH_INDEX[match[2].toLowerCase()];
+
+  const day = monthDayMatch
+    ? Number(match[2])
+    : Number(match[1]);
+
   const current = new Date();
   const inferredYear = match[3]
     ? Number(match[3])
@@ -428,6 +484,14 @@ const parseMeetingTitle = (
 ) => {
   const text = String(message || "").trim();
 
+  const titledParenMatch = text.match(
+    /\btitle\s*\(\s*([^\n)]+?)\s*\)/i
+  );
+
+  if (titledParenMatch) {
+    return titledParenMatch[1].trim();
+  }
+
   const titleMatch = text.match(
     /(?:^|\b)title\s*[:=-]\s*["']?([^"'\n]+)["']?\s*$/i
   );
@@ -661,6 +725,17 @@ const isMeetingContinuation = (
   return false;
 };
 
+const isVagueFollowUp = (message) => {
+  const text = String(message || "").trim().toLowerCase();
+  if (!text) return false;
+
+  if (text.length > 80) return false;
+
+  return /\b(already|above|as i said|as mentioned|same details|same time|same date|i told you)\b/.test(
+    text
+  );
+};
+
 const interpretMeetingMessage = ({
   message,
   pendingMeeting,
@@ -802,6 +877,30 @@ const handlePendingMeetingWorkflow = async ({
       pendingMeeting
     )
   ) {
+    if (isVagueFollowUp(message)) {
+      const missing = getMissingMeetingFields(
+        pendingMeeting
+      );
+
+      if (missing.length > 0) {
+        return {
+          success: true,
+          reply: buildMeetingClarificationReply(
+            pendingMeeting,
+            missing
+          ),
+          actions: [],
+        };
+      }
+
+      return {
+        success: true,
+        reply:
+          "I have your meeting details. Please confirm by saying 'create it now' so I can add it to your calendar.",
+        actions: [],
+      };
+    }
+
     console.log(
       "[ATHINA][ROUTING] Message is not a meeting continuation. Pending meeting preserved but not executed."
     );
@@ -1523,6 +1622,43 @@ export const orchestrate = async ({
     };
   }
 
+  const pendingMeeting = await getContext(
+    sessionId,
+    PENDING_MEETING_CONTEXT_KEY,
+    userId
+  );
+
+  if (pendingMeeting && isVagueAcknowledgement(normalizedMessage)) {
+    const missing =
+      getMissingMeetingFields(
+        pendingMeeting
+      );
+
+    const reply =
+      missing.length > 0
+        ? buildMeetingClarificationReply(
+            pendingMeeting,
+            missing
+          )
+        : "I have your meeting details ready. Say 'create it now' and I will add it to your calendar and send the invites.";
+
+    await saveTurn(
+      sessionId,
+      normalizedMessage,
+      reply,
+      userId
+    );
+
+    return {
+      success: true,
+      reply,
+      actions: [],
+      sessionId,
+      timestamp: timestamp(),
+      directAction: true,
+    };
+  }
+
   /* ---------------------------------------------------------
      5. QUICK REPLIES
      --------------------------------------------------------- */
@@ -1766,6 +1902,68 @@ export const orchestrate = async ({
       actions: [],
       sessionId,
       timestamp: timestamp(),
+    };
+  }
+
+  /* ---------------------------------------------------------
+     10.5 WRITE INTENT FIREWALL
+
+     Planner-generated write tasks must not execute unless the
+     latest user turn explicitly requests execution or confirms it.
+     This prevents ambiguous follow-ups from triggering writes.
+     --------------------------------------------------------- */
+
+  const includesWriteTask = tasks.some(
+    isWriteTask
+  );
+
+  if (
+    includesWriteTask &&
+    !hasExplicitWriteIntent(
+      normalizedMessage
+    ) &&
+    !hasExplicitWriteConfirmation(
+      normalizedMessage
+    )
+  ) {
+    const pendingMeeting = await getContext(
+      sessionId,
+      PENDING_MEETING_CONTEXT_KEY,
+      userId
+    );
+
+    let reply =
+      "I can continue, but I need explicit confirmation before I run write actions. Please say 'go ahead' or restate the exact action.";
+
+    if (pendingMeeting) {
+      const missing =
+        getMissingMeetingFields(
+          pendingMeeting
+        );
+
+      reply =
+        missing.length > 0
+          ? buildMeetingClarificationReply(
+              pendingMeeting,
+              missing
+            )
+          : "I have your meeting details. Please confirm by saying 'create it now' so I can add it to your calendar.";
+    }
+
+    await saveTurn(
+      sessionId,
+      normalizedMessage,
+      reply,
+      userId
+    );
+
+    return {
+      success: true,
+      reply,
+      actions: [],
+      sessionId,
+      timestamp: timestamp(),
+      planningFailed: true,
     };
   }
 

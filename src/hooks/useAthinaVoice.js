@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { invokeFunction } from '@/lib/functionApi';
 
-const WAKE_WORD_PATTERN = /\b(hey\s+)?athina\b/i;
+const WAKE_WORD_PATTERN = /\b(hey|hi|hello)?\s*athina\b/i;
 const END_OF_SPEECH_MS = 700;
+const WAKE_HOLD_MS = 6000;
 
 const getSpeechRecognitionCtor = () =>
   window.SpeechRecognition || window.webkitSpeechRecognition || null;
@@ -22,6 +23,7 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
   const utteranceStartedRef = useRef(false);
   const utteranceBufferRef = useRef('');
   const silenceTimerRef = useRef(null);
+  const wakeHoldTimerRef = useRef(null);
   const ignoreInputRef = useRef(false);
 
   const playbackCtxRef = useRef(null);
@@ -47,11 +49,19 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     }
   };
 
+  const clearWakeHoldTimer = () => {
+    if (wakeHoldTimerRef.current) {
+      clearTimeout(wakeHoldTimerRef.current);
+      wakeHoldTimerRef.current = null;
+    }
+  };
+
   const resetUtterance = () => {
     utteranceStartedRef.current = false;
     utteranceBufferRef.current = '';
     setInterimText('');
     clearSilenceTimer();
+    clearWakeHoldTimer();
   };
 
   const ensurePlaybackCtx = () => {
@@ -111,12 +121,25 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
         const afterWake = combinedText.slice(wakeMatch.index + wakeMatch[0].length).trim();
         utteranceBufferRef.current = afterWake;
         setInterimText(afterWake);
+
+        if (!afterWake) {
+          onAgentResponseRef.current?.('Listening.');
+          clearWakeHoldTimer();
+          wakeHoldTimerRef.current = setTimeout(() => {
+            if (!utteranceBufferRef.current.trim()) {
+              resetUtterance();
+              setListening(false);
+            }
+          }, WAKE_HOLD_MS);
+          return;
+        }
       } else {
         const updatedText = `${utteranceBufferRef.current} ${finalText} ${latestInterim}`.trim();
         utteranceBufferRef.current = updatedText;
         setInterimText(updatedText);
       }
 
+      clearWakeHoldTimer();
       clearSilenceTimer();
       silenceTimerRef.current = setTimeout(async () => {
         const transcript = utteranceBufferRef.current.trim();
@@ -169,6 +192,7 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
 
   const stopRecognition = () => {
     clearSilenceTimer();
+    clearWakeHoldTimer();
     resetUtterance();
 
     if (recognitionRef.current) {
@@ -279,6 +303,7 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     if (!voiceEnabled || !voiceSupported) return;
     shouldKeepListeningRef.current = true;
     setWakeMode(true);
+    onAgentResponseRef.current?.('Wake mode enabled. Say "Hi Athina" to start.');
     startRecognition();
   };
 
@@ -287,6 +312,7 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     setWakeMode(false);
     stopRecognition();
     stopPlayback();
+    onAgentResponseRef.current?.('Wake mode disabled.');
   };
 
   const toggleWakeMode = () => {

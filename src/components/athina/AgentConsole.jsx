@@ -229,7 +229,14 @@ export default function AgentConsole({ onActions, onAvatarState }) {
 
       return voiceActionPromiseRef.current;
     },
-    // No onAgentResponse — ElevenLabs' LLM output is ignored entirely
+    onAgentResponse: (text) => {
+      if (!text || typeof text !== 'string') return;
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === 'assistant' && last?.content === text) return prev;
+        return [...prev, { role: 'assistant', content: text }];
+      });
+    },
     voiceEnabled: true,
   });
 

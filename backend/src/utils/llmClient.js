@@ -144,11 +144,39 @@ const buildOpenRouterPayload = (model, messages, temperature, maxTokens, jsonMod
   return payload;
 };
 
+const extractMessageContent = (message) => {
+  const content = message?.content;
+
+  if (typeof content === "string") {
+    return content.trim();
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (typeof part?.text === "string") return part.text;
+        return "";
+      })
+      .join("\n")
+      .trim();
+  }
+
+  return "";
+};
+
 const tryModel = async (model, messages, temperature, maxTokens, jsonMode) => {
   const response = await callOpenRouter(buildOpenRouterPayload(model, messages, temperature, maxTokens, jsonMode));
   const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || "";
-  if (!content) throw new Error("Empty response from model " + model);
+  const content = extractMessageContent(data?.choices?.[0]?.message);
+
+  if (!content) {
+    const finishReason = data?.choices?.[0]?.finish_reason || "unknown";
+    throw new Error(
+      "Empty response from model " + model + " (finish_reason=" + finishReason + ")"
+    );
+  }
+
   if (jsonMode) {
     const parsed = safeJsonParse(content);
     if (!parsed) throw new Error("Failed to parse JSON from model " + model);
