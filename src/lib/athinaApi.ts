@@ -316,8 +316,36 @@ export const loadConversationHistory = async (
   };
 };
 
+export const blobToBase64 = async (
+  blob: Blob
+): Promise<string> => {
+  if (typeof FileReader === "undefined") {
+    throw new Error("FileReader is not available in this browser.");
+  }
+
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === "string") {
+        const markerIndex = reader.result.indexOf(",");
+        resolve(
+          markerIndex >= 0
+            ? reader.result.slice(markerIndex + 1)
+            : reader.result
+        );
+      } else {
+        reject(new Error("Failed to read audio blob."));
+      }
+    };
+    reader.onerror = () => {
+      reject(reader.error || new Error("Failed to read audio blob."));
+    };
+    reader.readAsDataURL(blob);
+  });
+};
+
 export const sendVoiceMessage = async (
-  audioBase64: string,
+  audio: string | Blob,
   sessionId = getClientIdentity().sessionId,
   locationContext?: MapLocationContext | null
 ): Promise<AgentResponse & {
@@ -326,6 +354,10 @@ export const sendVoiceMessage = async (
 }> => {
   const { userId } = getClientIdentity();
   const url = `${BACKEND_BASE_URL}/api/voice`;
+  const audioBase64 =
+    typeof audio === "string"
+      ? audio
+      : await blobToBase64(audio);
 
   const response = await fetch(url, {
     method: "POST",

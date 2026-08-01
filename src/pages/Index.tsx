@@ -16,6 +16,7 @@ import {
   MapLocationContext,
   loadConversationHistory,
   sendAgentMessage,
+  sendVoiceMessage,
   speakText,
 } from "../lib/athinaApi.ts";
 import { getClientSessionId } from "../lib/clientIdentity";
@@ -84,6 +85,10 @@ const Index = () => {
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const voiceSessionOpenRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const voiceCaptureTimerRef = useRef<number | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const isSpeakingRef = useRef(false);
   const isProcessingRef = useRef(false);
 
@@ -264,92 +269,121 @@ const Index = () => {
   }, []);
 
   const stopRecognition = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.onresult = null;
-      recognitionRef.current.onend = null;
-      recognitionRef.current.onerror = null;
-      recognitionRef.current.abort?.();
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
+    if (voiceCaptureTimerRef.current) {
+      window.clearTimeout(voiceCaptureTimerRef.current);
+      voiceCaptureTimerRef.current = null;
     }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    mediaRecorderRef.current = null;
+    audioChunksRef.current = [];
     setIsRecording(false);
   }, []);
 
   const startVoiceRecording = useCallback(async () => {
+    if (!voiceSessionOpenRef.current) return;
     if (isSpeaking) {
       stopSpeechPlayback(true);
     }
+
+    if (mediaRecorderRef.current || mediaStreamRef.current) {
+      return;
+    }
+
     setIsConnecting(true);
     setVoiceStatus("listening");
-    try {
-      const Recognition =
-        ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition) as
-          | SpeechRecognitionConstructor
-          | undefined;
 
-      if (!Recognition) {
-        addMessage("agent", "Speech recognition is not available in this browser. Please use the text box.");
-        setIsConnecting(false);
-        setIsVoiceSessionOpen(false);
-        setVoiceStatus("ready");
-        voiceSessionOpenRef.current = false;
-        return;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Microphone access is not supported in this browser.");
       }
 
-      const recognition = new Recognition();
-      recognitionRef.current = recognition;
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = "en-US";
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
 
-      recognition.onresult = async (event) => {
-        const transcript = Array.from({ length: event.results.length })
-          .map((_, index) => event.results[index][0].transcript)
-          .join(" ")
-          .trim();
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
 
-        if (!transcript) return;
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
 
-        const stopIntent = /\b(stop|pause|silence|be quiet|cancel|shut up|enough)\b/i.test(transcript);
-        if (stopIntent) {
-          addMessage("user", transcript);
-          stopSpeechPlayback();
-          setIsRecording(false);
-          return;
-        }
-
-        addMessage("user", transcript);
-        setIsRecording(false);
-        setIsProcessing(true);
-        setVoiceStatus("processing");
-
-        const result = await runAgent(transcript, "voice");
-        await speakReply(result.reply, result.audioBase64 || null);
-      };
-
-      recognition.onerror = () => {
-        addMessage("agent", "I could not capture your voice request. Please try again or use text.");
-        setIsRecording(false);
-        setIsConnecting(false);
-        setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
-      };
-
-      recognition.onend = () => {
-        setIsRecording(false);
-        setIsConnecting(false);
-        if (voiceSessionOpenRef.current && !isSpeakingRef.current && !isProcessingRef.current) {
-          setVoiceStatus("listening");
-          setTimeout(() => {
-            if (voiceSessionOpenRef.current && !isProcessingRef.current && !isSpeakingRef.current) {
-              startVoiceRecording();
-            }
-          }, 500);
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
         }
       };
 
-      recognition.start();
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+        audioChunksRef.current = [];
+
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+          mediaStreamRef.current = null;
+        }
+
+        mediaRecorderRef.current = null;
+        setIsRecording(false);
+
+        if (!voiceSessionOpenRef.current) return;
+
+        try {
+          setIsProcessing(true);
+          setVoiceStatus("processing");
+
+          const audioBase64 = await sendVoiceMessage(audioBlob, SESSION_ID, selectedMapLocation);
+          const transcript = audioBase64.transcript?.trim() || "";
+
+          if (transcript) {
+            addMessage("user", transcript);
+          }
+
+          if (audioBase64.reply) {
+            addMessage("agent", audioBase64.reply);
+            applyActions(audioBase64.actions || []);
+            await speakReply(audioBase64.reply, audioBase64.audioBase64 || null);
+          } else {
+            addMessage("agent", "I couldn't listen to that audio clip. Please try again.");
+            setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
+          }
+        } catch (error) {
+          console.error("Voice recording error:", error);
+          addMessage("agent", "I couldn't process that voice request. Please try again or use text.");
+          setVoiceStatus(voiceSessionOpenRef.current ? "listening" : "ready");
+        } finally {
+          setIsProcessing(false);
+          if (voiceSessionOpenRef.current && !isSpeakingRef.current && !isProcessingRef.current) {
+            setVoiceStatus("listening");
+            setTimeout(() => {
+              if (voiceSessionOpenRef.current && !isProcessingRef.current && !isSpeakingRef.current) {
+                startVoiceRecording();
+              }
+            }, 500);
+          }
+        }
+      };
+
+      recorder.start();
       setIsRecording(true);
       setIsConnecting(false);
+
+      voiceCaptureTimerRef.current = window.setTimeout(() => {
+        if (recorder.state === "recording") {
+          recorder.stop();
+        }
+      }, 6000);
     } catch (error) {
       console.error("Voice recording error:", error);
       setIsConnecting(false);
@@ -357,7 +391,7 @@ const Index = () => {
       setVoiceStatus("ready");
       addMessage("agent", "Microphone access failed. Please check browser permissions.");
     }
-  }, [addMessage, isSpeaking, runAgent, speakReply, stopSpeechPlayback]);
+  }, [addMessage, applyActions, isSpeaking, selectedMapLocation, speakReply, stopSpeechPlayback]);
 
   const openVoiceSession = useCallback(() => {
     if (voiceSessionOpenRef.current) return;
