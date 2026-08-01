@@ -1047,7 +1047,7 @@ const handleProductivityIntents = async ({
 
   const asksWhoFrom =
     asksLastEmail &&
-    /who.*from|from who/.test(text);
+    /who.*from|from who|who sent|sender/.test(text);
 
   const asksSummary =
     asksLastEmail &&

@@ -44,6 +44,43 @@ const summarizeExecution = (executed = []) => {
   return summary;
 };
 
+const extractEmailAddressFromHeader = (header = "") => {
+  const match = String(header).match(/<([^>]+)>/);
+  return match ? match[1] : String(header || "").trim();
+};
+
+const buildDeterministicExecutionReply = (executed = []) => {
+  const successfulEmailRead = executed.find(
+    (task) =>
+      task?.result?.success === true &&
+      task?.result?.type === "email" &&
+      String(task?.result?.action || "").toLowerCase() === "read" &&
+      task?.result?.message
+  );
+
+  if (successfulEmailRead) {
+    const message = successfulEmailRead.result.message || {};
+    const from = extractEmailAddressFromHeader(message.from || "unknown sender");
+    const subject = String(message.subject || "(no subject)").trim();
+    return `Your latest email is from ${from}. Subject: ${subject}.`;
+  }
+
+  const successfulEmailList = executed.find(
+    (task) =>
+      task?.result?.success === true &&
+      task?.result?.type === "email" &&
+      String(task?.result?.action || "").toLowerCase() === "list"
+  );
+
+  if (successfulEmailList) {
+    const count = Number(successfulEmailList.result.count || 0);
+    if (count === 0) return "Your inbox appears empty right now.";
+    return `I checked your inbox and found ${count} recent email${count === 1 ? "" : "s"}.`;
+  }
+
+  return null;
+};
+
 const normalizeMessage = (message) =>
   String(message || "")
     .toLowerCase()
@@ -96,6 +133,11 @@ export const buildCompactExecutionReply = async (executed) => {
     return "I'm here. How can I help?";
   }
 
+  const deterministicReply = buildDeterministicExecutionReply(executed);
+  if (deterministicReply) {
+    return deterministicReply;
+  }
+
   const execution = summarizeExecution(executed);
 
   const resultsSummary = executed.map((task) => {
@@ -114,7 +156,19 @@ export const buildCompactExecutionReply = async (executed) => {
       return "- Created calendar event: " + (result.title || task.description);
     }
     if (result.type === "email") {
-      return "- Sent email to " + result.to;
+      const action = String(result.action || "").toLowerCase();
+      if (action === "send") {
+        return "- Sent email to " + (result.to || "the provided recipient");
+      }
+      if (action === "read") {
+        const from = extractEmailAddressFromHeader(result.message?.from || "unknown sender");
+        const subject = String(result.message?.subject || "(no subject)").trim();
+        return `- Read email from ${from}. Subject: ${subject}.`;
+      }
+      if (action === "list") {
+        return "- Listed inbox emails. Count: " + Number(result.count || 0);
+      }
+      return "- Completed email action: " + (result.action || "unknown");
     }
     if (result.type === "booking") {
       return "- Checked booking options for " + (result.query || task.description);
@@ -148,7 +202,7 @@ export const buildCompactExecutionReply = async (executed) => {
   ];
 
   try {
-    const reply = await callLLM({ messages, temperature: 0.4, maxTokens: 400 });
+    const reply = await callLLM({ messages, temperature: 0.2, maxTokens: 320 });
     return reply;
   } catch (error) {
     console.warn("[ATHINA] LLM reply generation failed, using fallback:", error.message);
