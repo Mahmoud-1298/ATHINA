@@ -3,7 +3,7 @@ import { safeJsonParse } from "./helpers.js";
 const PRIMARY_MODEL =
   process.env.ATHINA_PRIMARY_MODEL ||
   process.env.OPENROUTER_MODEL ||
-  "deepseek/deepseek-v4-flash-0731";
+  "openai/gpt-oss-120b";
 
 const FALLBACK_MODELS = (process.env.ATHINA_FALLBACK_MODELS || "")
   .split(",")
