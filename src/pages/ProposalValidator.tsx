@@ -12,6 +12,8 @@ import {
   ListChecks,
   Loader2,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   ShieldCheck,
   Upload,
@@ -60,6 +62,7 @@ const ProposalValidator = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [referenceDrawerOpen, setReferenceDrawerOpen] = useState(false);
   const [referenceSearch, setReferenceSearch] = useState("");
   const [resultTab, setResultTab] = useState<ResultTab>("overview");
@@ -145,24 +148,23 @@ const ProposalValidator = () => {
       ) : null}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-[#063D2B] text-white shadow-2xl transition-transform duration-300 lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-[#063D2B] text-white shadow-2xl transition-[width,transform] duration-300 lg:translate-x-0 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        } ${sidebarCollapsed ? "lg:w-20" : "lg:w-72"}`}
       >
-        <div className="flex h-20 items-center justify-between border-b border-white/10 px-6">
-          <div>
-            <div className="flex items-center gap-2">
-              <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#00A651] shadow-lg shadow-black/15">
-                <ShieldCheck className="h-5 w-5" />
-              </div>
-              <div>
-                <p className="text-base font-bold tracking-[0.16em]">MORO HUB</p>
-                <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-100/65">ATHINA</p>
-              </div>
+        <div className={`flex h-20 items-center border-b border-white/10 ${sidebarCollapsed ? "justify-center px-3 lg:px-2" : "justify-between px-6"}`}>
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#00A651] shadow-lg shadow-black/15">
+              <ShieldCheck className="h-5 w-5" />
+            </div>
+            <div className={sidebarCollapsed ? "lg:hidden" : ""}>
+              <p className="whitespace-nowrap text-base font-bold tracking-[0.16em]">MORO HUB</p>
+              <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-100/65">ATHINA</p>
             </div>
           </div>
           <button
             type="button"
+            aria-label="Close navigation"
             className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white lg:hidden"
             onClick={() => setSidebarOpen(false)}
           >
@@ -171,26 +173,27 @@ const ProposalValidator = () => {
         </div>
 
         <nav className="flex-1 space-y-2 px-4 py-6" aria-label="Primary navigation">
-          <p className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-100/45">
+          <p className={`mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-100/45 ${sidebarCollapsed ? "lg:hidden" : ""}`}>
             Workspace
           </p>
 
           <Link
             to="/"
             onClick={() => setSidebarOpen(false)}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-emerald-50/75 transition hover:bg-white/10 hover:text-white"
+            className={`flex w-full items-center rounded-xl px-3 py-3 text-sm font-medium text-emerald-50/75 transition hover:bg-white/10 hover:text-white ${sidebarCollapsed ? "lg:justify-center" : "gap-3"}`}
+            title={sidebarCollapsed ? "Back to home" : undefined}
           >
-            <ArrowLeft className="h-5 w-5" />
-            Back to home
+            <ArrowLeft className="h-5 w-5 shrink-0" />
+            <span className={sidebarCollapsed ? "lg:hidden" : ""}>Back to home</span>
           </Link>
 
           <div
-            className="flex w-full items-center gap-3 rounded-xl bg-white px-3 py-3 text-sm font-medium text-[#063D2B] shadow-lg shadow-black/10"
+            className={`flex w-full items-center rounded-xl bg-white px-3 py-3 text-sm font-medium text-[#063D2B] shadow-lg shadow-black/10 ${sidebarCollapsed ? "lg:justify-center" : "gap-3"}`}
             aria-current="page"
           >
             <ShieldCheck className="h-5 w-5 text-[#00A651]" />
-            Proposal Validator
-            <span className="ml-auto h-2 w-2 rounded-full bg-[#00A651]" />
+            <span className={sidebarCollapsed ? "lg:hidden" : ""}>Proposal Validator</span>
+            <span className={`h-2 w-2 rounded-full bg-[#00A651] ${sidebarCollapsed ? "hidden" : "ml-auto"}`} />
           </div>
 
           <button
@@ -199,27 +202,39 @@ const ProposalValidator = () => {
               setReferenceDrawerOpen(true);
               setSidebarOpen(false);
             }}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-emerald-50/75 transition hover:bg-white/10 hover:text-white"
+            className={`flex w-full items-center rounded-xl px-3 py-3 text-sm font-medium text-emerald-50/75 transition hover:bg-white/10 hover:text-white ${sidebarCollapsed ? "lg:justify-center" : "gap-3"}`}
+            title={sidebarCollapsed ? "Browse references" : undefined}
           >
-            <Database className="h-5 w-5" />
-            Browse references
+            <Database className="h-5 w-5 shrink-0" />
+            <span className={sidebarCollapsed ? "lg:hidden" : ""}>Browse references</span>
           </button>
         </nav>
 
         <div className="border-t border-white/10 p-4">
-          <div className="rounded-2xl bg-white/[0.07] p-4">
-            <div className="flex items-center gap-2 text-xs font-medium text-emerald-50">
-              <span className="h-2 w-2 rounded-full bg-emerald-400" />
-              Validator operational
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+            className={`mb-3 hidden w-full items-center rounded-xl px-3 py-3 text-sm font-medium text-emerald-50/75 transition hover:bg-white/10 hover:text-white lg:flex ${sidebarCollapsed ? "justify-center" : "gap-3"}`}
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
+            <span className={sidebarCollapsed ? "hidden" : ""}>Collapse sidebar</span>
+          </button>
+
+          <div className={`rounded-2xl bg-white/[0.07] ${sidebarCollapsed ? "p-3 lg:flex lg:justify-center" : "p-4"}`}>
+            <div className="flex items-center gap-2 text-xs font-medium text-emerald-50" title="Validator operational">
+              <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
+              <span className={sidebarCollapsed ? "lg:hidden" : ""}>Validator operational</span>
             </div>
-            <p className="mt-2 text-[11px] leading-5 text-emerald-100/55">
+            <p className={`mt-2 text-[11px] leading-5 text-emerald-100/55 ${sidebarCollapsed ? "lg:hidden" : ""}`}>
               Reference intelligence is available for proposal scoring.
             </p>
           </div>
         </div>
       </aside>
 
-      <div className="min-h-screen lg:pl-72">
+      <div className={`min-h-screen transition-[padding] duration-300 ${sidebarCollapsed ? "lg:pl-20" : "lg:pl-72"}`}>
         <header className="sticky top-0 z-30 border-b border-[#DDE8E2] bg-white/90 backdrop-blur-xl">
           <div className="flex h-20 items-center justify-between px-4 sm:px-6 lg:px-8">
             <div className="flex items-center gap-3">
