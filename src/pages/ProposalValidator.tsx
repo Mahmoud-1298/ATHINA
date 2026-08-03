@@ -107,7 +107,7 @@ const ProposalValidator = () => {
                 Reference corpus
               </div>
               <p className="mt-2 text-2xl font-semibold text-white">{context?.referenceFiles.length || 0}</p>
-              <p className="text-xs text-emerald-100/60">Reference files available for scoring</p>
+              <p className="text-xs text-emerald-100/85">Reference files available for scoring</p>
             </div>
           </div>
         </header>
@@ -120,7 +120,7 @@ const ProposalValidator = () => {
                   <ShieldCheck className="h-5 w-5 text-emerald-300" />
                   Reference intelligence
                 </CardTitle>
-                <CardDescription className="text-emerald-50/60">
+                <CardDescription className="text-emerald-50/85">
                   These are the source files ATHINA checks before scoring the uploaded proposal.
                 </CardDescription>
               </CardHeader>
@@ -151,7 +151,7 @@ const ProposalValidator = () => {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-sm font-medium text-white">{file.name}</p>
-                          <p className="mt-1 text-[11px] uppercase tracking-[0.22em] text-emerald-200/60">{file.category}</p>
+                          <p className="mt-1 text-[11px] uppercase tracking-[0.22em] text-emerald-200/85">{file.category}</p>
                         </div>
                         <FileCheck2 className="mt-0.5 h-4 w-4 text-emerald-300/80" />
                       </div>
@@ -168,14 +168,14 @@ const ProposalValidator = () => {
                     <WandSparkles className="h-5 w-5 text-emerald-300" />
                     Validation outcome
                   </CardTitle>
-                  <CardDescription className="text-emerald-50/60">
+                  <CardDescription className="text-emerald-50/85">
                     {proposalName || "Uploaded proposal"}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
                   <div className="flex flex-col gap-4 rounded-3xl border border-emerald-400/15 bg-emerald-500/[0.07] p-5 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <p className="text-[11px] uppercase tracking-[0.24em] text-emerald-200/65">Overall score</p>
+                      <p className="text-[11px] uppercase tracking-[0.24em] text-emerald-200/85">Overall score</p>
                       <p className="mt-2 text-4xl font-semibold text-white">{result.overallScore}%</p>
                     </div>
                     <div className={`inline-flex items-center rounded-full border px-4 py-2 text-xs uppercase tracking-[0.22em] ${getDecisionTone(result.decision)}`}>
@@ -193,12 +193,12 @@ const ProposalValidator = () => {
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <div>
                             <p className="text-sm font-semibold text-white">{category.label}</p>
-                            <p className="text-[11px] uppercase tracking-[0.2em] text-emerald-200/55">{category.score}% achieved</p>
+                            <p className="text-[11px] uppercase tracking-[0.2em] text-emerald-200/80">{category.score}% achieved</p>
                           </div>
                           <span className="text-xl font-semibold text-emerald-200">{category.score}%</span>
                         </div>
                         <Progress value={category.score} className="h-2 bg-emerald-500/10 [&>div]:bg-emerald-400" />
-                        <p className="mt-4 text-sm leading-6 text-emerald-50/70">{category.assessment || category.achieved}</p>
+                        <p className="mt-4 text-sm leading-6 text-emerald-50/88">{category.assessment || category.achieved}</p>
                         {category.issues.length > 0 ? (
                           <div className="mt-4">
                             <p className="text-[11px] uppercase tracking-[0.22em] text-rose-200/70">Gaps</p>
@@ -245,7 +245,7 @@ const ProposalValidator = () => {
                   <Upload className="h-5 w-5 text-emerald-300" />
                   Upload proposal
                 </CardTitle>
-                <CardDescription className="text-emerald-50/60">
+                <CardDescription className="text-emerald-50/85">
                   Supported formats: PDF, DOCX, TXT, MD, and JSON.
                 </CardDescription>
               </CardHeader>
@@ -253,7 +253,7 @@ const ProposalValidator = () => {
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-emerald-400/25 bg-emerald-500/[0.05] px-6 py-12 text-center transition hover:border-emerald-300/40 hover:bg-emerald-500/[0.08]">
                   <Upload className="mb-4 h-8 w-8 text-emerald-300" />
                   <span className="text-sm font-medium text-white">Choose a commercial proposal file</span>
-                  <span className="mt-2 text-xs text-emerald-100/60">The file is sent to ATHINA for review and archived in storage.</span>
+                  <span className="mt-2 text-xs text-emerald-100/85">The file is sent to ATHINA for review and archived in storage.</span>
                   <input
                     type="file"
                     className="hidden"
@@ -271,7 +271,7 @@ const ProposalValidator = () => {
                 {selectedFile ? (
                   <div className="rounded-2xl border border-emerald-400/12 bg-emerald-500/[0.06] p-4">
                     <p className="text-sm font-medium text-white">{selectedFile.name}</p>
-                    <p className="mt-1 text-xs text-emerald-100/60">{Math.max(1, Math.round(selectedFile.size / 1024))} KB</p>
+                    <p className="mt-1 text-xs text-emerald-100/85">{Math.max(1, Math.round(selectedFile.size / 1024))} KB</p>
                   </div>
                 ) : null}
 
