@@ -28,10 +28,10 @@ const RELEVANCE_NAME_MIN_OVERLAP = Number(
   process.env.VALIDATOR_RELEVANCE_NAME_MIN_OVERLAP || 0.04
 );
 const RELEVANCE_CONTEXT_MIN_OVERLAP = Number(
-  process.env.VALIDATOR_RELEVANCE_CONTEXT_MIN_OVERLAP || 0.06
+  process.env.VALIDATOR_RELEVANCE_CONTEXT_MIN_OVERLAP || 0.08
 );
 const RELEVANCE_COMBINED_MIN_OVERLAP = Number(
-  process.env.VALIDATOR_RELEVANCE_COMBINED_MIN_OVERLAP || 0.06
+  process.env.VALIDATOR_RELEVANCE_COMBINED_MIN_OVERLAP || 0.08
 );
 const RELEVANCE_MIN_NAME_ANCHOR_HITS = Number(
   process.env.VALIDATOR_RELEVANCE_MIN_NAME_ANCHOR_HITS || 0
@@ -345,29 +345,36 @@ export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles
 
   const requirementGatePassed =
     requirementRefs.length === 0 ||
-    requirementOverlap >= 0.06 ||
-    requirementHits >= 4;
+    requirementOverlap >= 0.14 ||
+    (requirementOverlap >= 0.09 && requirementHits >= 5);
 
   const costingGatePassed =
     costingRefs.length === 0 ||
-    costingContextOverlap >= 0.05 ||
-    costingHits >= 3 ||
-    (proposalNumbers.size > 0 && costingNumbers.size > 0 && costingNumericOverlap >= 0.18);
+    costingContextOverlap >= 0.12 ||
+    (costingContextOverlap >= 0.08 && costingHits >= 4) ||
+    (proposalNumbers.size > 0 && costingNumbers.size > 0 && costingNumericOverlap >= 0.25);
 
   const identityGatePassed =
     nameAnchorHits >= 1 ||
     nameOverlap >= RELEVANCE_NAME_MIN_OVERLAP;
 
+  const hardMismatch =
+    nameAnchorHits === 0 &&
+    requirementOverlap < 0.06 &&
+    costingContextOverlap < 0.06 &&
+    costingNumericOverlap < 0.15;
+
   const isRelevant =
     hasMeaningfulName &&
     hasMeaningfulContext &&
+    !hardMismatch &&
     (!hasReferenceSignal || (passesOverlapGate && passesAnchorGate)) &&
     requirementGatePassed &&
     costingGatePassed &&
     identityGatePassed;
 
   const mismatchReason =
-    "The proposal name/context does not align with the supplied company/solution references. " +
+    "The proposal does not match the supplied requirement/costing references, so ATHINA treated it as unrelated. " +
     `name overlap=${Math.round(nameOverlap * 100)}%, context overlap=${Math.round(
       contextOverlap * 100
     )}%, requirements overlap=${Math.round(requirementOverlap * 100)}%, costing overlap=${Math.round(

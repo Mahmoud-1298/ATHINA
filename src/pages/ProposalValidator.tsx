@@ -168,7 +168,7 @@ const ProposalValidator = () => {
                     <WandSparkles className="h-5 w-5 text-emerald-300" />
                     Validation outcome
                   </CardTitle>
-                  <CardDescription className="text-emerald-50/85">
+                  <CardDescription className="text-white">
                     {proposalName || "Uploaded proposal"}
                   </CardDescription>
                 </CardHeader>
@@ -184,7 +184,7 @@ const ProposalValidator = () => {
                   </div>
 
                   <div className="rounded-2xl border border-emerald-400/12 bg-black/20 p-4">
-                    <p className="text-sm leading-7 text-emerald-50/78">{result.summary}</p>
+                    <p className="text-sm leading-7 text-white">{result.summary}</p>
                   </div>
 
                   <div className="grid gap-4 xl:grid-cols-2">
@@ -193,16 +193,16 @@ const ProposalValidator = () => {
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <div>
                             <p className="text-sm font-semibold text-white">{category.label}</p>
-                            <p className="text-[11px] uppercase tracking-[0.2em] text-emerald-200/80">{category.score}% achieved</p>
+                            <p className="text-[11px] uppercase tracking-[0.2em] text-white">{category.score}% achieved</p>
                           </div>
-                          <span className="text-xl font-semibold text-emerald-200">{category.score}%</span>
+                          <span className="text-xl font-semibold text-white">{category.score}%</span>
                         </div>
                         <Progress value={category.score} className="h-2 bg-emerald-500/10 [&>div]:bg-emerald-400" />
-                        <p className="mt-4 text-sm leading-6 text-emerald-50/88">{category.assessment || category.achieved}</p>
+                        <p className="mt-4 text-sm leading-6 text-white">{category.assessment || category.achieved}</p>
                         {category.issues.length > 0 ? (
                           <div className="mt-4">
-                            <p className="text-[11px] uppercase tracking-[0.22em] text-rose-200/70">Gaps</p>
-                            <div className="mt-2 space-y-2 text-sm text-rose-100/80">
+                            <p className="text-[11px] uppercase tracking-[0.22em] text-white">Gaps</p>
+                            <div className="mt-2 space-y-2 text-sm text-white">
                               {category.issues.map((issue, index) => (
                                 <p key={`${category.key}-issue-${index}`}>{issue}</p>
                               ))}
@@ -225,8 +225,8 @@ const ProposalValidator = () => {
 
                   {result.missingItems.length > 0 ? (
                     <div className="rounded-2xl border border-amber-300/20 bg-amber-500/8 p-4">
-                      <p className="text-[11px] uppercase tracking-[0.22em] text-amber-100/75">Missing or weak items</p>
-                      <div className="mt-3 space-y-2 text-sm text-amber-50/90">
+                      <p className="text-[11px] uppercase tracking-[0.22em] text-white">Missing or weak items</p>
+                      <div className="mt-3 space-y-2 text-sm text-white">
                         {result.missingItems.map((item, index) => (
                           <p key={`missing-${index}`}>{item}</p>
                         ))}
