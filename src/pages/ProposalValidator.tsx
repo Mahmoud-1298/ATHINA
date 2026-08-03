@@ -18,15 +18,19 @@ import {
   ShieldCheck,
   Upload,
   WandSparkles,
+  MessageCircle,
+  Send,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import AgentConsole from "@/components/athina/AgentConsole";
 import {
   fetchProposalValidatorContext,
   validateProposalFile,
   type ValidatorContextResponse,
   type ValidatorResult,
+  type ValidatorReferenceMode,
 } from "@/lib/proposalValidatorApi";
 
 const getDecisionTone = (decision: string) => {
@@ -65,6 +69,8 @@ const ProposalValidator = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [referenceDrawerOpen, setReferenceDrawerOpen] = useState(false);
   const [referenceSearch, setReferenceSearch] = useState("");
+  const [additionalReferenceFiles, setAdditionalReferenceFiles] = useState<File[]>([]);
+  const [referenceMode, setReferenceMode] = useState<ValidatorReferenceMode>("database");
   const [resultTab, setResultTab] = useState<ResultTab>("overview");
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
@@ -116,7 +122,10 @@ const ProposalValidator = () => {
     setError("");
 
     try {
-      const response = await validateProposalFile(selectedFile);
+      const response = await validateProposalFile(selectedFile, {
+        referenceMode,
+        additionalReferenceFiles,
+      });
       setProposalName(response.proposalName);
       setResult(response.result);
       setResultTab("overview");
@@ -134,6 +143,22 @@ const ProposalValidator = () => {
     if (file) setProposalName(file.name);
   };
 
+  const addReferenceFiles = (files: FileList | null) => {
+    if (!files?.length) return;
+    setAdditionalReferenceFiles((current) => {
+      const existing = new Set(current.map((file) => `${file.name}-${file.size}-${file.lastModified}`));
+      const next = Array.from(files).filter(
+        (file) => !existing.has(`${file.name}-${file.size}-${file.lastModified}`),
+      );
+      return [...current, ...next];
+    });
+    setReferenceMode((mode) => (mode === "database" ? "both" : mode));
+  };
+
+  const removeReferenceFile = (index: number) => {
+    setAdditionalReferenceFiles((current) => current.filter((_, fileIndex) => fileIndex !== index));
+  };
+
 
 
   return (
@@ -148,13 +173,13 @@ const ProposalValidator = () => {
       ) : null}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-[#063D2B] text-white shadow-2xl transition-[width,transform] duration-300 lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-[#535559] text-white shadow-2xl transition-[width,transform] duration-300 lg:translate-x-0 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         } ${sidebarCollapsed ? "lg:w-20" : "lg:w-72"}`}
       >
         <div className={`flex h-20 items-center border-b border-white/10 ${sidebarCollapsed ? "justify-center px-3 lg:px-2" : "justify-between px-6"}`}>
           <div className="flex min-w-0 items-center gap-2">
-            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#00A651] shadow-lg shadow-black/15">
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#84BD00] shadow-lg shadow-black/15">
               <ShieldCheck className="h-5 w-5" />
             </div>
             <div className={sidebarCollapsed ? "lg:hidden" : ""}>
@@ -188,12 +213,12 @@ const ProposalValidator = () => {
           </Link>
 
           <div
-            className={`flex w-full items-center rounded-xl bg-white px-3 py-3 text-sm font-medium text-[#063D2B] shadow-lg shadow-black/10 ${sidebarCollapsed ? "lg:justify-center" : "gap-3"}`}
+            className={`flex w-full items-center rounded-xl bg-white px-3 py-3 text-sm font-medium text-[#535559] shadow-lg shadow-black/10 ${sidebarCollapsed ? "lg:justify-center" : "gap-3"}`}
             aria-current="page"
           >
-            <ShieldCheck className="h-5 w-5 text-[#00A651]" />
+            <ShieldCheck className="h-5 w-5 text-[#84BD00]" />
             <span className={sidebarCollapsed ? "lg:hidden" : ""}>Proposal Validator</span>
-            <span className={`h-2 w-2 rounded-full bg-[#00A651] ${sidebarCollapsed ? "hidden" : "ml-auto"}`} />
+            <span className={`h-2 w-2 rounded-full bg-[#84BD00] ${sidebarCollapsed ? "hidden" : "ml-auto"}`} />
           </div>
 
           <button
@@ -203,10 +228,10 @@ const ProposalValidator = () => {
               setSidebarOpen(false);
             }}
             className={`flex w-full items-center rounded-xl px-3 py-3 text-sm font-medium text-emerald-50/75 transition hover:bg-white/10 hover:text-white ${sidebarCollapsed ? "lg:justify-center" : "gap-3"}`}
-            title={sidebarCollapsed ? "Browse references" : undefined}
+            title={sidebarCollapsed ? "Ask ATHINA" : undefined}
           >
-            <Database className="h-5 w-5 shrink-0" />
-            <span className={sidebarCollapsed ? "lg:hidden" : ""}>Browse references</span>
+            <MessageCircle className="h-5 w-5 shrink-0" />
+            <span className={sidebarCollapsed ? "lg:hidden" : ""}>Ask ATHINA</span>
           </button>
         </nav>
 
@@ -241,14 +266,14 @@ const ProposalValidator = () => {
               <button
                 type="button"
                 aria-label="Open navigation"
-                className="rounded-xl border border-[#DDE8E2] bg-white p-2.5 text-[#063D2B] lg:hidden"
+                className="rounded-xl border border-[#DDE8E2] bg-white p-2.5 text-[#535559] lg:hidden"
                 onClick={() => setSidebarOpen(true)}
               >
                 <Menu className="h-5 w-5" />
               </button>
               <Link
                 to="/"
-                className="hidden h-10 w-10 items-center justify-center rounded-xl border border-[#DDE8E2] bg-white text-[#426057] transition hover:border-[#00A651] hover:text-[#00A651] sm:inline-flex"
+                className="hidden h-10 w-10 items-center justify-center rounded-xl border border-[#DDE8E2] bg-white text-[#535559] transition hover:border-[#84BD00] hover:text-[#84BD00] sm:inline-flex"
                 aria-label="Back to home"
               >
                 <ArrowLeft className="h-4 w-4" />
@@ -263,7 +288,7 @@ const ProposalValidator = () => {
                 <span className="h-2 w-2 rounded-full bg-emerald-500" />
                 Secure workspace
               </div>
-              <div className="grid h-10 w-10 place-items-center rounded-full bg-[#063D2B] text-sm font-semibold text-white">MH</div>
+              <div className="grid h-10 w-10 place-items-center rounded-full bg-[#535559] text-sm font-semibold text-white">MH</div>
             </div>
           </div>
         </header>
@@ -271,7 +296,7 @@ const ProposalValidator = () => {
         <main className="mx-auto max-w-[1500px] px-4 py-8 sm:px-6 lg:px-8">
           <section className="mb-8 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
             <div>
-              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#008D46]">
+              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#72A600]">
                 <WandSparkles className="h-4 w-4" />
                 ATHINA intelligence
               </div>
@@ -283,7 +308,7 @@ const ProposalValidator = () => {
               </p>
             </div>
             <div className="flex items-center gap-2 text-xs text-[#64746C]">
-              <ShieldCheck className="h-4 w-4 text-[#00A651]" />
+              <ShieldCheck className="h-4 w-4 text-[#84BD00]" />
               Files are securely processed and archived
             </div>
           </section>
@@ -291,7 +316,7 @@ const ProposalValidator = () => {
           <section className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border border-[#DDE8E2] bg-white p-5 shadow-[0_8px_30px_rgba(24,61,45,0.06)]">
               <div className="flex items-center justify-between">
-                <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#EAF8F1] text-[#00A651]">
+                <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#F3F9E6] text-[#84BD00]">
                   <Database className="h-5 w-5" />
                 </div>
                 {loadingContext ? <Loader2 className="h-4 w-4 animate-spin text-[#64746C]" /> : null}
@@ -301,7 +326,7 @@ const ProposalValidator = () => {
             </div>
 
             <div className="rounded-2xl border border-[#DDE8E2] bg-white p-5 shadow-[0_8px_30px_rgba(24,61,45,0.06)]">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#EAF8F1] text-[#00A651]">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#F3F9E6] text-[#84BD00]">
                 <FolderOpen className="h-5 w-5" />
               </div>
               <p className="mt-5 text-2xl font-bold text-[#17211D]">{sortedCategories.length}</p>
@@ -309,7 +334,7 @@ const ProposalValidator = () => {
             </div>
 
             <div className="rounded-2xl border border-[#DDE8E2] bg-white p-5 shadow-[0_8px_30px_rgba(24,61,45,0.06)]">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#EAF8F1] text-[#00A651]">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#F3F9E6] text-[#84BD00]">
                 <FileCheck2 className="h-5 w-5" />
               </div>
               <p className="mt-5 truncate text-base font-bold text-[#17211D]">{proposalName || "No proposal"}</p>
@@ -317,7 +342,7 @@ const ProposalValidator = () => {
             </div>
 
             <div className="rounded-2xl border border-[#DDE8E2] bg-white p-5 shadow-[0_8px_30px_rgba(24,61,45,0.06)]">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#EAF8F1] text-[#00A651]">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#F3F9E6] text-[#84BD00]">
                 <ListChecks className="h-5 w-5" />
               </div>
               <p className={`mt-5 text-2xl font-bold ${result ? getScoreTone(result.overallScore) : "text-[#17211D]"}`}>
@@ -336,21 +361,21 @@ const ProposalValidator = () => {
                 </div>
 
                 <label
-                  className="group flex min-h-[300px] cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed border-[#BFD6CA] bg-[#F8FBF9] px-6 py-12 text-center transition hover:border-[#00A651] hover:bg-[#F0FAF5]"
+                  className="group flex min-h-[300px] cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed border-[#DCEAB8] bg-[#F8FBF9] px-6 py-12 text-center transition hover:border-[#84BD00] hover:bg-[#F7FBEF]"
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => {
                     event.preventDefault();
                     handleFile(event.dataTransfer.files?.[0] || null);
                   }}
                 >
-                  <div className="grid h-16 w-16 place-items-center rounded-2xl bg-[#EAF8F1] text-[#00A651] transition group-hover:scale-105">
+                  <div className="grid h-16 w-16 place-items-center rounded-2xl bg-[#F3F9E6] text-[#84BD00] transition group-hover:scale-105">
                     <Upload className="h-7 w-7" />
                   </div>
                   <span className="mt-5 text-base font-semibold text-[#17211D]">Drop your commercial proposal here</span>
                   <span className="mt-2 max-w-md text-sm leading-6 text-[#64746C]">
                     Or browse to select a file from your device. The proposal will be evaluated against the approved reference corpus.
                   </span>
-                  <span className="mt-5 rounded-xl bg-[#063D2B] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-950/10">
+                  <span className="mt-5 rounded-xl bg-[#535559] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-950/10">
                     Browse files
                   </span>
                   <input
@@ -364,7 +389,7 @@ const ProposalValidator = () => {
                 {selectedFile ? (
                   <div className="mt-5 flex flex-col gap-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex min-w-0 items-center gap-3">
-                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white text-[#00A651] shadow-sm">
+                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white text-[#84BD00] shadow-sm">
                         <FileText className="h-5 w-5" />
                       </div>
                       <div className="min-w-0">
@@ -383,6 +408,10 @@ const ProposalValidator = () => {
                   </div>
                 ) : null}
 
+                <div className="mt-5 rounded-2xl border border-[#DCEAB8] bg-[#F7FBEF] px-4 py-3 text-sm text-[#527600]">
+                  Validation source: {referenceMode === "database" ? "approved database references" : referenceMode === "uploaded" ? `${additionalReferenceFiles.length} uploaded reference files` : `database plus ${additionalReferenceFiles.length} uploaded reference files`}.
+                </div>
+
                 {error ? (
                   <div className="mt-5 flex gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -394,7 +423,7 @@ const ProposalValidator = () => {
                   type="button"
                   onClick={handleValidate}
                   disabled={!selectedFile || submitting || loadingContext}
-                  className="mt-5 h-12 w-full rounded-xl bg-[#00A651] font-semibold text-white shadow-lg shadow-emerald-700/15 hover:bg-[#008D46] disabled:bg-slate-200 disabled:text-slate-500"
+                  className="mt-5 h-12 w-full rounded-xl bg-[#84BD00] font-semibold text-white shadow-lg shadow-emerald-700/15 hover:bg-[#72A600] disabled:bg-slate-200 disabled:text-slate-500"
                 >
                   {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
                   {submitting ? "Validating proposal..." : "Validate proposal"}
@@ -407,14 +436,14 @@ const ProposalValidator = () => {
                     <p className="text-lg font-bold text-[#17211D]">Reference intelligence</p>
                     <p className="mt-1 text-sm leading-6 text-[#64746C]">Approved sources ATHINA uses during scoring.</p>
                   </div>
-                  <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#EAF8F1] text-[#00A651]">
+                  <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#F3F9E6] text-[#84BD00]">
                     <Database className="h-5 w-5" />
                   </div>
                 </div>
 
                 {loadingContext ? (
                   <div className="mt-6 flex items-center gap-3 rounded-2xl bg-[#F4F8F6] p-4 text-sm text-[#64746C]">
-                    <Loader2 className="h-4 w-4 animate-spin text-[#00A651]" />
+                    <Loader2 className="h-4 w-4 animate-spin text-[#84BD00]" />
                     Loading references...
                   </div>
                 ) : (
@@ -422,10 +451,10 @@ const ProposalValidator = () => {
                     {sortedCategories.slice(0, 6).map(([category, count]) => (
                       <div key={category} className="flex items-center justify-between rounded-2xl border border-[#E5EEE9] px-4 py-3.5">
                         <div className="flex min-w-0 items-center gap-3">
-                          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[#00A651]" />
-                          <span className="truncate text-sm font-medium text-[#31443C]">{category}</span>
+                          <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[#84BD00]" />
+                          <span className="truncate text-sm font-medium text-[#3F4540]">{category}</span>
                         </div>
-                        <span className="rounded-full bg-[#EAF8F1] px-2.5 py-1 text-xs font-bold text-[#008D46]">{count}</span>
+                        <span className="rounded-full bg-[#F3F9E6] px-2.5 py-1 text-xs font-bold text-[#72A600]">{count}</span>
                       </div>
                     ))}
                   </div>
@@ -434,13 +463,13 @@ const ProposalValidator = () => {
                 <button
                   type="button"
                   onClick={() => setReferenceDrawerOpen(true)}
-                  className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl border border-[#CFE0D7] px-4 py-3 text-sm font-semibold text-[#063D2B] transition hover:border-[#00A651] hover:bg-[#F0FAF5]"
+                  className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl border border-[#DCEAB8] px-4 py-3 text-sm font-semibold text-[#535559] transition hover:border-[#84BD00] hover:bg-[#F7FBEF]"
                 >
                   <FolderOpen className="h-4 w-4" />
                   View all reference files
                 </button>
 
-                <div className="mt-6 rounded-2xl bg-[#063D2B] p-5 text-white">
+                <div className="mt-6 rounded-2xl bg-[#535559] p-5 text-white">
                   <div className="flex items-center gap-2 text-sm font-semibold">
                     <CheckCircle2 className="h-4 w-4 text-emerald-300" />
                     Reference corpus ready
@@ -454,7 +483,7 @@ const ProposalValidator = () => {
           ) : (
             <section className="space-y-6">
               <div className="overflow-hidden rounded-3xl border border-[#DDE8E2] bg-white shadow-[0_14px_50px_rgba(24,61,45,0.07)]">
-                <div className="bg-[#063D2B] px-5 py-6 text-white sm:px-7">
+                <div className="bg-[#535559] px-5 py-6 text-white sm:px-7">
                   <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200/75">Validation complete</p>
@@ -503,7 +532,7 @@ const ProposalValidator = () => {
                       onClick={() => setResultTab(key)}
                       className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-semibold transition ${
                         resultTab === key
-                          ? "border-[#00A651] text-[#008D46]"
+                          ? "border-[#84BD00] text-[#72A600]"
                           : "border-transparent text-[#64746C] hover:text-[#17211D]"
                       }`}
                     >
@@ -529,7 +558,7 @@ const ProposalValidator = () => {
                                   <p className="truncate text-sm font-bold text-[#17211D]">{category.label}</p>
                                   <span className={`text-sm font-bold ${getScoreTone(category.score)}`}>{category.score}%</span>
                                 </div>
-                                <Progress value={category.score} className="h-2 bg-[#EAF1ED] [&>div]:bg-[#00A651]" />
+                                <Progress value={category.score} className="h-2 bg-[#EAF1ED] [&>div]:bg-[#84BD00]" />
                               </div>
                               <ChevronDown className={`h-5 w-5 shrink-0 text-[#64746C] transition ${expanded ? "rotate-180" : ""}`} />
                             </button>
@@ -553,7 +582,7 @@ const ProposalValidator = () => {
                                     <div className="mt-3 space-y-2">
                                       {category.recommendations.length ? category.recommendations.map((recommendation, index) => (
                                         <div key={`${category.key}-rec-${index}`} className="flex gap-2 text-sm text-[#52675E]">
-                                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#00A651]" />
+                                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#84BD00]" />
                                           <span>{recommendation}</span>
                                         </div>
                                       )) : <p className="text-sm text-[#64746C]">No recommendations required.</p>}
@@ -602,11 +631,11 @@ const ProposalValidator = () => {
                       {result.categories.flatMap((category) =>
                         category.recommendations.map((recommendation, index) => (
                           <div key={`${category.key}-${index}`} className="flex gap-4 rounded-2xl border border-[#DDE8E2] p-5">
-                            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#EAF8F1] text-[#00A651]">
+                            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#F3F9E6] text-[#84BD00]">
                               <CheckCircle2 className="h-4 w-4" />
                             </div>
                             <div>
-                              <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#008D46]">{category.label}</p>
+                              <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#72A600]">{category.label}</p>
                               <p className="mt-2 text-sm leading-6 text-[#52675E]">{recommendation}</p>
                             </div>
                           </div>
@@ -628,7 +657,7 @@ const ProposalValidator = () => {
                         <button
                           type="button"
                           onClick={() => setReferenceDrawerOpen(true)}
-                          className="rounded-xl border border-[#CFE0D7] px-4 py-2.5 text-sm font-semibold text-[#063D2B] hover:border-[#00A651] hover:bg-[#F0FAF5]"
+                          className="rounded-xl border border-[#DCEAB8] px-4 py-2.5 text-sm font-semibold text-[#535559] hover:border-[#84BD00] hover:bg-[#F7FBEF]"
                         >
                           Browse references
                         </button>
@@ -650,7 +679,7 @@ const ProposalValidator = () => {
                   type="button"
                   variant="outline"
                   onClick={() => setReferenceDrawerOpen(true)}
-                  className="h-11 rounded-xl border-[#CFE0D7] text-[#063D2B] hover:bg-[#F0FAF5]"
+                  className="h-11 rounded-xl border-[#DCEAB8] text-[#535559] hover:bg-[#F7FBEF]"
                 >
                   <Database className="h-4 w-4" />
                   View references
@@ -663,7 +692,7 @@ const ProposalValidator = () => {
                     setProposalName("");
                     setExpandedCategory(null);
                   }}
-                  className="h-11 rounded-xl bg-[#00A651] text-white hover:bg-[#008D46]"
+                  className="h-11 rounded-xl bg-[#84BD00] text-white hover:bg-[#72A600]"
                 >
                   <Upload className="h-4 w-4" />
                   Validate another proposal
@@ -678,54 +707,140 @@ const ProposalValidator = () => {
         <div className="fixed inset-0 z-[60] flex justify-end">
           <button
             type="button"
-            aria-label="Close reference drawer"
+            aria-label="Close ATHINA assistant"
             className="absolute inset-0 bg-slate-950/35 backdrop-blur-[2px]"
             onClick={() => setReferenceDrawerOpen(false)}
           />
-          <aside className="relative flex h-full w-full max-w-xl flex-col bg-white shadow-2xl">
-            <div className="flex items-start justify-between border-b border-[#DDE8E2] p-5 sm:p-6">
-              <div>
-                <p className="text-lg font-bold text-[#17211D]">Reference files</p>
-                <p className="mt-1 text-sm text-[#64746C]">Browse the approved validation corpus.</p>
+
+          <aside className="relative flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-[#DDE8E2] px-5 py-4 sm:px-6">
+              <div className="flex items-center gap-3">
+                <div className="grid h-11 w-11 place-items-center rounded-2xl bg-[#84BD00] text-white shadow-lg shadow-lime-700/15">
+                  <WandSparkles className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-lg font-bold text-[#17211D]">Ask ATHINA</p>
+                  <p className="mt-0.5 text-sm text-[#64746C]">Proposal validation assistant</p>
+                </div>
               </div>
               <button
                 type="button"
+                aria-label="Close ATHINA assistant"
                 onClick={() => setReferenceDrawerOpen(false)}
                 className="rounded-xl border border-[#DDE8E2] p-2 text-[#64746C] hover:bg-[#F4F8F6] hover:text-[#17211D]"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="border-b border-[#E5EEE9] p-5 sm:p-6">
-              <div className="flex items-center gap-3 rounded-xl border border-[#DDE8E2] bg-[#F8FBF9] px-4 py-3 focus-within:border-[#00A651] focus-within:ring-2 focus-within:ring-emerald-100">
-                <Search className="h-4 w-4 text-[#64746C]" />
-                <input
-                  value={referenceSearch}
-                  onChange={(event) => setReferenceSearch(event.target.value)}
-                  placeholder="Search by file name or category"
-                  className="w-full bg-transparent text-sm text-[#17211D] outline-none placeholder:text-[#8A9B93]"
-                />
+
+            <div className="min-h-0 flex-1 overflow-y-auto bg-[#F7F9F5] p-4 sm:p-6">
+              <div className="overflow-hidden rounded-3xl border border-[#DCEAB8] bg-white shadow-[0_12px_40px_rgba(83,85,89,0.08)]">
+                <style>{`
+                  #proposal-athina-chat > div { background: #ffffff !important; color: #17211D !important; }
+                  #proposal-athina-chat [class*="bg-[#0a0e14]"] { background: #ffffff !important; }
+                  #proposal-athina-chat [class*="bg-slate-800"] { background: #F3F9E6 !important; }
+                  #proposal-athina-chat [class*="border-slate"] { border-color: #DCEAB8 !important; }
+                  #proposal-athina-chat [class*="text-slate-2"],
+                  #proposal-athina-chat [class*="text-slate-3"] { color: #17211D !important; }
+                  #proposal-athina-chat [class*="text-slate-4"],
+                  #proposal-athina-chat [class*="text-slate-5"] { color: #64746C !important; }
+                  #proposal-athina-chat [class*="text-cyan"] { color: #527600 !important; }
+                  #proposal-athina-chat [class*="bg-cyan"] { background-color: rgba(132,189,0,0.12) !important; }
+                  #proposal-athina-chat [class*="border-cyan"] { border-color: rgba(132,189,0,0.35) !important; }
+                  #proposal-athina-chat input { background: #F7F9F5 !important; color: #17211D !important; border-color: #DCEAB8 !important; }
+                  #proposal-athina-chat input:focus { border-color: #84BD00 !important; }
+                  #proposal-athina-chat { scrollbar-color: #84BD00 #F3F9E6; }
+                  #proposal-athina-chat *::-webkit-scrollbar { width: 8px; }
+                  #proposal-athina-chat *::-webkit-scrollbar-track { background: #F3F9E6; }
+                  #proposal-athina-chat *::-webkit-scrollbar-thumb { background: #84BD00; border-radius: 999px; }
+                `}</style>
+                <div id="proposal-athina-chat" className="h-[360px] sm:h-[420px]">
+                  <AgentConsole />
+                </div>
               </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-5 sm:p-6">
-              <div className="mb-4 flex items-center justify-between text-xs text-[#64746C]">
-                <span>{filteredReferences.length} files</span>
-                <span>{sortedCategories.length} categories</span>
-              </div>
-              <div className="space-y-3">
-                {filteredReferences.map((file) => (
-                  <div key={file.path} className="flex items-start gap-3 rounded-2xl border border-[#DDE8E2] p-4 transition hover:border-[#BFD6CA] hover:bg-[#F8FBF9]">
-                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#EAF8F1] text-[#00A651]">
-                      <FileCheck2 className="h-5 w-5" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="break-words text-sm font-semibold text-[#17211D]">{file.name}</p>
-                      <p className="mt-1 text-xs font-medium uppercase tracking-[0.1em] text-[#008D46]">{file.category}</p>
-                    </div>
+
+              <div className="mt-5 rounded-3xl border border-[#DCEAB8] bg-white p-5 shadow-[0_12px_40px_rgba(83,85,89,0.06)]">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="font-bold text-[#17211D]">Additional validation references</p>
+                    <p className="mt-1 text-sm leading-6 text-[#64746C]">
+                      Upload temporary reference files when the proposal should be checked against content outside the approved database.
+                    </p>
                   </div>
-                ))}
-                {!filteredReferences.length ? (
-                  <div className="rounded-2xl bg-[#F4F8F6] p-8 text-center text-sm text-[#64746C]">No matching reference files.</div>
+                  <span className="shrink-0 rounded-full bg-[#F3F9E6] px-3 py-1.5 text-xs font-bold text-[#527600]">
+                    {additionalReferenceFiles.length} files
+                  </span>
+                </div>
+
+                <div className="mt-5 grid gap-2 sm:grid-cols-3">
+                  {([
+                    ["database", "Database only"],
+                    ["uploaded", "Uploaded only"],
+                    ["both", "Use both"],
+                  ] as [ValidatorReferenceMode, string][]).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setReferenceMode(mode)}
+                      disabled={mode !== "database" && additionalReferenceFiles.length === 0}
+                      className={`rounded-xl border px-3 py-2.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                        referenceMode === mode
+                          ? "border-[#84BD00] bg-[#F3F9E6] text-[#527600]"
+                          : "border-[#DDE8E2] bg-white text-[#64746C] hover:border-[#84BD00]"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="mt-5 flex cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-[#DCEAB8] bg-[#F7FBEF] px-5 py-5 text-sm font-semibold text-[#527600] transition hover:border-[#84BD00] hover:bg-[#F3F9E6]">
+                  <Upload className="h-4 w-4" />
+                  Upload reference files
+                  <input
+                    type="file"
+                    multiple
+                    className="hidden"
+                    accept=".pdf,.docx,.txt,.md,.json"
+                    onChange={(event) => {
+                      addReferenceFiles(event.target.files);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+
+                {additionalReferenceFiles.length > 0 ? (
+                  <div className="mt-4 space-y-2">
+                    {additionalReferenceFiles.map((file, index) => (
+                      <div key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center gap-3 rounded-2xl border border-[#DDE8E2] bg-[#F9FBF7] p-3">
+                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#F3F9E6] text-[#84BD00]">
+                          <FileText className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-[#17211D]">{file.name}</p>
+                          <p className="mt-0.5 text-xs text-[#64746C]">{formatFileSize(file.size)}</p>
+                        </div>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${file.name}`}
+                          onClick={() => removeReferenceFile(index)}
+                          className="rounded-lg p-2 text-[#64746C] hover:bg-rose-50 hover:text-rose-600"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdditionalReferenceFiles([]);
+                        setReferenceMode("database");
+                      }}
+                      className="text-xs font-semibold text-[#64746C] hover:text-rose-600"
+                    >
+                      Clear all uploaded references
+                    </button>
+                  </div>
                 ) : null}
               </div>
             </div>
