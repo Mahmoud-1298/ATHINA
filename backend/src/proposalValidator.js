@@ -25,19 +25,19 @@ const MAX_PROPOSAL_CHARS_PER_CATEGORY = Number(
   process.env.VALIDATOR_MAX_PROPOSAL_CHARS_PER_CATEGORY || 12000
 );
 const RELEVANCE_NAME_MIN_OVERLAP = Number(
-  process.env.VALIDATOR_RELEVANCE_NAME_MIN_OVERLAP || 0.12
+  process.env.VALIDATOR_RELEVANCE_NAME_MIN_OVERLAP || 0.04
 );
 const RELEVANCE_CONTEXT_MIN_OVERLAP = Number(
-  process.env.VALIDATOR_RELEVANCE_CONTEXT_MIN_OVERLAP || 0.16
+  process.env.VALIDATOR_RELEVANCE_CONTEXT_MIN_OVERLAP || 0.06
 );
 const RELEVANCE_COMBINED_MIN_OVERLAP = Number(
-  process.env.VALIDATOR_RELEVANCE_COMBINED_MIN_OVERLAP || 0.14
+  process.env.VALIDATOR_RELEVANCE_COMBINED_MIN_OVERLAP || 0.06
 );
 const RELEVANCE_MIN_NAME_ANCHOR_HITS = Number(
-  process.env.VALIDATOR_RELEVANCE_MIN_NAME_ANCHOR_HITS || 1
+  process.env.VALIDATOR_RELEVANCE_MIN_NAME_ANCHOR_HITS || 0
 );
 const RELEVANCE_MIN_ANCHOR_HITS = Number(
-  process.env.VALIDATOR_RELEVANCE_MIN_ANCHOR_HITS || 3
+  process.env.VALIDATOR_RELEVANCE_MIN_ANCHOR_HITS || 1
 );
 
 const CATEGORIES = [
@@ -255,14 +255,34 @@ const extractProposalIdentity = (fileName, proposalText) => {
 
 export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles = []) => {
   const identity = extractProposalIdentity(fileName, proposalText);
-  const referenceNameText = (referenceFiles || [])
-    .map((file) => file.name || "")
-    .join("\n");
+  const requirementOrCostingRef = /requirement|requirements|scope|sow|brief|context|cost|costing|pricing|price|commercial|quotation|quote|boq|bill/i;
+  const gateReferenceFiles = (referenceFiles || []).filter((file) =>
+    requirementOrCostingRef.test(String(file?.name || "")) ||
+    ["context", "architecture", "pricing", "finance"].includes(
+      String(file?.category || "").toLowerCase()
+    )
+  );
+
+  const effectiveGateFiles = gateReferenceFiles.length
+    ? gateReferenceFiles
+    : (referenceFiles || []);
+
+  const requirementRefs = effectiveGateFiles.filter((file) => {
+    const text = `${file?.name || ""} ${file?.category || ""}`;
+    return /requirement|requirements|scope|sow|brief|context|architecture|technical/i.test(text);
+  });
+
+  const costingRefs = effectiveGateFiles.filter((file) => {
+    const text = `${file?.name || ""} ${file?.category || ""}`;
+    return /cost|costing|pricing|price|commercial|quotation|quote|finance|payment|invoice|boq|bill/i.test(text);
+  });
+
+  const referenceNameText = effectiveGateFiles.map((file) => file.name || "").join("\n");
   const referenceNameTerms = tokenizeImportantTerms(referenceNameText, 600);
-  const referenceIdentitySnippets = (referenceFiles || []).map(
+  const referenceIdentitySnippets = effectiveGateFiles.map(
     (file) => `${file.name || ""}\n${trimForPrompt(file.content || "", 1400)}`
   );
-  const referenceIdentityText = (referenceFiles || [])
+  const referenceIdentityText = effectiveGateFiles
     .map((file) => `${file.name || ""}\n${trimForPrompt(file.content || "", 1400)}`)
     .join("\n\n");
   const referenceTerms = tokenizeImportantTerms(referenceIdentityText, 2400);
@@ -293,6 +313,25 @@ export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles
   const nameAnchorHits = Array.from(identity.nameTerms).filter((term) => referenceNameTerms.has(term)).length;
   const contextAnchorHits = Array.from(identity.contextTerms).filter((term) => anchorTerms.has(term)).length;
 
+  const requirementsText = requirementRefs
+    .map((file) => `${file.name || ""}\n${trimForPrompt(file.content || "", 2200)}`)
+    .join("\n\n");
+  const costingText = costingRefs
+    .map((file) => `${file.name || ""}\n${trimForPrompt(file.content || "", 2200)}`)
+    .join("\n\n");
+
+  const requirementsTerms = tokenizeImportantTerms(requirementsText, 2200);
+  const costingTerms = tokenizeImportantTerms(costingText, 2200);
+  const proposalNumbers = extractNumericTokens(proposalText);
+  const costingNumbers = extractNumericTokens(costingText);
+
+  const requirementOverlap = overlapRatio(identity.contextTerms, requirementsTerms);
+  const costingContextOverlap = overlapRatio(identity.contextTerms, costingTerms);
+  const costingNumericOverlap = overlapRatio(proposalNumbers, costingNumbers);
+
+  const requirementHits = Array.from(identity.contextTerms).filter((term) => requirementsTerms.has(term)).length;
+  const costingHits = Array.from(identity.contextTerms).filter((term) => costingTerms.has(term)).length;
+
   const hasMeaningfulName = identity.nameTerms.size > 0;
   const hasMeaningfulContext = identity.contextTerms.size > 0;
   const hasReferenceSignal = referenceTerms.size >= 30;
@@ -304,26 +343,45 @@ export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles
     (referenceNameTerms.size === 0 || nameAnchorHits >= RELEVANCE_MIN_NAME_ANCHOR_HITS) &&
     (anchorTerms.size === 0 || contextAnchorHits >= RELEVANCE_MIN_ANCHOR_HITS);
 
-  const severeMismatch =
-    nameOverlap < RELEVANCE_NAME_MIN_OVERLAP * 0.5 ||
-    contextOverlap < RELEVANCE_CONTEXT_MIN_OVERLAP * 0.5;
+  const requirementGatePassed =
+    requirementRefs.length === 0 ||
+    requirementOverlap >= 0.06 ||
+    requirementHits >= 4;
+
+  const costingGatePassed =
+    costingRefs.length === 0 ||
+    costingContextOverlap >= 0.05 ||
+    costingHits >= 3 ||
+    (proposalNumbers.size > 0 && costingNumbers.size > 0 && costingNumericOverlap >= 0.18);
+
+  const identityGatePassed =
+    nameAnchorHits >= 1 ||
+    nameOverlap >= RELEVANCE_NAME_MIN_OVERLAP;
+
   const isRelevant =
     hasMeaningfulName &&
     hasMeaningfulContext &&
-    !severeMismatch &&
-    (!hasReferenceSignal || (passesOverlapGate && passesAnchorGate));
+    (!hasReferenceSignal || (passesOverlapGate && passesAnchorGate)) &&
+    requirementGatePassed &&
+    costingGatePassed &&
+    identityGatePassed;
 
   const mismatchReason =
     "The proposal name/context does not align with the supplied company/solution references. " +
     `name overlap=${Math.round(nameOverlap * 100)}%, context overlap=${Math.round(
       contextOverlap * 100
-    )}%, name anchor hits=${nameAnchorHits}, context anchor hits=${contextAnchorHits}, total anchor hits=${anchorHits}.`;
+    )}%, requirements overlap=${Math.round(requirementOverlap * 100)}%, costing overlap=${Math.round(
+      costingContextOverlap * 100
+    )}%, pricing number overlap=${Math.round(costingNumericOverlap * 100)}%, name anchor hits=${nameAnchorHits}, context anchor hits=${contextAnchorHits}, total anchor hits=${anchorHits}.`;
 
   return {
     isRelevant,
     nameOverlap,
     contextOverlap,
     combinedOverlap,
+    requirementOverlap,
+    costingContextOverlap,
+    costingNumericOverlap,
     nameAnchorHits,
     contextAnchorHits,
     anchorHits,
