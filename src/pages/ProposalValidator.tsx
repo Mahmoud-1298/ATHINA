@@ -97,7 +97,7 @@ const ProposalValidator = () => {
             </div>
             <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">Commercial proposal review</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-emerald-50/72">
-              Upload a proposal and ATHINA will evaluate it against the fixed legal, finance, pricing, grammar, context, and architecture references stored in Supabase.
+              Upload a proposal and ATHINA will evaluate it.
             </p>
           </div>
           <div className="grid gap-3 sm:min-w-[18rem]">
@@ -107,7 +107,7 @@ const ProposalValidator = () => {
                 Reference corpus
               </div>
               <p className="mt-2 text-2xl font-semibold text-white">{context?.referenceFiles.length || 0}</p>
-              <p className="text-xs text-emerald-100/60">Supabase reference files available for scoring</p>
+              <p className="text-xs text-emerald-100/60">Reference files available for scoring</p>
             </div>
           </div>
         </header>
@@ -128,7 +128,7 @@ const ProposalValidator = () => {
                 {loadingContext ? (
                   <div className="flex items-center gap-3 rounded-2xl border border-emerald-400/10 bg-emerald-500/5 px-4 py-4 text-sm text-emerald-100/70">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading Supabase reference documents...
+                    Loading reference documents...
                   </div>
                 ) : null}
 
@@ -155,9 +155,6 @@ const ProposalValidator = () => {
                         </div>
                         <FileCheck2 className="mt-0.5 h-4 w-4 text-emerald-300/80" />
                       </div>
-                      {file.excerpt ? (
-                        <p className="mt-3 text-sm leading-6 text-emerald-50/65">{file.excerpt}</p>
-                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -172,7 +169,7 @@ const ProposalValidator = () => {
                     Validation outcome
                   </CardTitle>
                   <CardDescription className="text-emerald-50/60">
-                    {proposalName || "Uploaded proposal"} reviewed against the current Supabase corpus.
+                    {proposalName || "Uploaded proposal"}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">

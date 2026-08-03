@@ -7,7 +7,6 @@ export interface ValidatorReferenceFile {
   category: string;
   updatedAt?: string | null;
   size?: number | null;
-  excerpt?: string;
 }
 
 export interface ValidatorCategoryScore {

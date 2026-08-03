@@ -24,6 +24,18 @@ const MAX_REFERENCE_CHARS_PER_CATEGORY = Number(
 const MAX_PROPOSAL_CHARS_PER_CATEGORY = Number(
   process.env.VALIDATOR_MAX_PROPOSAL_CHARS_PER_CATEGORY || 12000
 );
+const RELEVANCE_NAME_MIN_OVERLAP = Number(
+  process.env.VALIDATOR_RELEVANCE_NAME_MIN_OVERLAP || 0.06
+);
+const RELEVANCE_CONTEXT_MIN_OVERLAP = Number(
+  process.env.VALIDATOR_RELEVANCE_CONTEXT_MIN_OVERLAP || 0.08
+);
+const RELEVANCE_COMBINED_MIN_OVERLAP = Number(
+  process.env.VALIDATOR_RELEVANCE_COMBINED_MIN_OVERLAP || 0.1
+);
+const RELEVANCE_MIN_ANCHOR_HITS = Number(
+  process.env.VALIDATOR_RELEVANCE_MIN_ANCHOR_HITS || 2
+);
 
 const CATEGORIES = [
   {
@@ -240,29 +252,67 @@ const extractProposalIdentity = (fileName, proposalText) => {
 
 export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles = []) => {
   const identity = extractProposalIdentity(fileName, proposalText);
-  const referenceText = (referenceFiles || [])
-    .map((file) => `${file.name || ""}\n${file.content || ""}`)
+  const referenceIdentitySnippets = (referenceFiles || []).map(
+    (file) => `${file.name || ""}\n${trimForPrompt(file.content || "", 1400)}`
+  );
+  const referenceIdentityText = (referenceFiles || [])
+    .map((file) => `${file.name || ""}\n${trimForPrompt(file.content || "", 1400)}`)
     .join("\n\n");
-  const referenceTerms = tokenizeImportantTerms(referenceText, 2400);
+  const referenceTerms = tokenizeImportantTerms(referenceIdentityText, 2400);
+  const anchorFrequency = new Map();
+
+  for (const snippet of referenceIdentitySnippets) {
+    for (const token of tokenizeImportantTerms(snippet, 1000)) {
+      anchorFrequency.set(token, (anchorFrequency.get(token) || 0) + 1);
+    }
+  }
+
+  const anchorTerms = new Set(
+    Array.from(anchorFrequency.entries())
+      .filter(([term]) => term.length >= 5)
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, 120)
+      .map(([term]) => term)
+  );
 
   const nameOverlap = overlapRatio(identity.nameTerms, referenceTerms);
   const contextOverlap = overlapRatio(identity.contextTerms, referenceTerms);
   const combinedOverlap = (nameOverlap + contextOverlap) / 2;
+  const proposalTerms = new Set([
+    ...Array.from(identity.nameTerms),
+    ...Array.from(identity.contextTerms),
+  ]);
+  const anchorHits = Array.from(anchorTerms).filter((term) => proposalTerms.has(term)).length;
+
   const hasMeaningfulName = identity.nameTerms.size > 0;
   const hasMeaningfulContext = identity.contextTerms.size > 0;
+  const hasReferenceSignal = referenceTerms.size >= 30;
+  const passesOverlapGate =
+    nameOverlap >= RELEVANCE_NAME_MIN_OVERLAP &&
+    contextOverlap >= RELEVANCE_CONTEXT_MIN_OVERLAP &&
+    combinedOverlap >= RELEVANCE_COMBINED_MIN_OVERLAP;
+  const passesAnchorGate =
+    anchorTerms.size === 0 || anchorHits >= RELEVANCE_MIN_ANCHOR_HITS;
   const isRelevant =
-    (hasMeaningfulName && nameOverlap >= 0.08) ||
-    (hasMeaningfulContext && contextOverlap >= 0.08) ||
-    (hasMeaningfulName && hasMeaningfulContext && combinedOverlap >= 0.1);
+    hasMeaningfulName &&
+    hasMeaningfulContext &&
+    (!hasReferenceSignal || (passesOverlapGate && passesAnchorGate));
+
+  const mismatchReason =
+    "The proposal name/context does not align with the supplied company/solution references. " +
+    `name overlap=${Math.round(nameOverlap * 100)}%, context overlap=${Math.round(
+      contextOverlap * 100
+    )}%, anchor hits=${anchorHits}.`;
 
   return {
     isRelevant,
     nameOverlap,
     contextOverlap,
     combinedOverlap,
+    anchorHits,
     reason: isRelevant
       ? null
-      : "The proposal name and context do not align with the supplied reference files, so the proposal appears unrelated to the requested scope.",
+      : mismatchReason,
     proposalName: identity.name,
     contextPreview: identity.contextPreview,
   };
@@ -1160,7 +1210,6 @@ export const getProposalValidatorContext = async () => {
       category: file.category,
       updatedAt: file.updatedAt,
       size: file.size,
-      excerpt: trimForPrompt(file.content, 220),
     })),
   };
 };
@@ -1253,14 +1302,6 @@ export const validateProposalUpload = async ({
     );
   }
 
-  const proposalStoragePath = await uploadProposalCopy({
-    buffer,
-    fileName,
-    mimeType,
-    userId,
-    sessionId,
-  });
-
   const diagnostics = buildProposalDiagnostics(proposalText);
   const commercialChecks = extractCommercialChecks(proposalText);
   const relevanceGate = evaluateProposalRelevance(fileName, proposalText, referenceFiles);
@@ -1304,7 +1345,7 @@ export const validateProposalUpload = async ({
       sessionId,
       userId,
       fileName,
-      proposalStoragePath,
+      proposalStoragePath: null,
       result: fallbackResult,
     });
 
@@ -1312,7 +1353,7 @@ export const validateProposalUpload = async ({
       success: true,
       reportId,
       proposalName: fileName,
-      proposalStoragePath,
+      proposalStoragePath: null,
       referenceFiles: referenceFiles.map((file) => ({
         name: file.name,
         path: file.path,
@@ -1321,6 +1362,14 @@ export const validateProposalUpload = async ({
       result: fallbackResult,
     };
   }
+
+  const proposalStoragePath = await uploadProposalCopy({
+    buffer,
+    fileName,
+    mimeType,
+    userId,
+    sessionId,
+  });
 
   const packets = buildCategoryPackets(referenceFiles, proposalText);
 
