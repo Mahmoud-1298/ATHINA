@@ -78,7 +78,7 @@ export default function CommandCenter() {
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#070816] text-white">
       {/* Contextual map canvas. It stays fully functional but visually recedes behind ATHINA. */}
-      <div className="absolute inset-0 opacity-55 saturate-[0.75]">
+      <div className="absolute inset-0 opacity-80">
         <DarkMap markers={mapMarkers} flyTo={mapFlyTo} />
       </div>
 
@@ -141,20 +141,17 @@ export default function CommandCenter() {
         </div>
       </header>
 
-      {/* ATHINA presence. Smaller and central, leaving room for conversation. */}
-      <section className="pointer-events-none absolute left-1/2 top-[10%] z-[700] -translate-x-1/2 sm:top-[9%]">
+      {/* ATHINA presence on the right, leaving the center open for conversation. */}
+      <section className="pointer-events-none absolute -right-16 top-[11%] z-[700] w-[340px] sm:-right-4 sm:top-[10%] lg:right-[3%] lg:top-[12%]">
         <div className="relative flex flex-col items-center">
           <div className="absolute top-12 h-64 w-64 rounded-full bg-violet-500/15 blur-3xl sm:h-80 sm:w-80" />
-          <div className="relative scale-[0.78] sm:scale-[0.96] lg:scale-110">
+          <div className="relative origin-center scale-[0.78] sm:scale-[0.96] lg:scale-110">
             <AthinaAvatar state={avatarState} size={340} />
           </div>
           <div className="relative -mt-16 text-center sm:-mt-10">
             <p className="text-xs font-medium uppercase tracking-[0.28em] text-violet-200/70">
               ATHINA
             </p>
-            <h2 className="mt-2 text-xl font-semibold tracking-tight text-white sm:text-2xl">
-              How can I help Mahmoud?
-            </h2>
           </div>
         </div>
       </section>
@@ -187,6 +184,10 @@ export default function CommandCenter() {
         Placing the component here moves its input to the familiar centered-bottom AI layout.
       */}
       <main className="absolute inset-x-0 bottom-4 z-[1200] mx-auto w-[calc(100%-1.25rem)] max-w-3xl sm:bottom-6 sm:w-[calc(100%-2rem)]">
+        <h2 className="mb-4 text-center text-xl font-semibold tracking-tight text-white drop-shadow-[0_4px_18px_rgba(0,0,0,0.55)] sm:text-2xl">
+          How can I help you Mahmoud?
+        </h2>
+
         <style>{`
           /* Hide optional starter prompts without changing AgentConsole APIs. */
           #athina-chat-shell [data-suggestions],

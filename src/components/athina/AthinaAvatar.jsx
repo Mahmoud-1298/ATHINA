@@ -1,11 +1,11 @@
 import React, { useRef, useEffect } from 'react';
 
-// Palette from the selected reference
-const HUB_COLOR = [0, 206, 209];       // #00CED1 bright cyan
-const HUB_HOT = [255, 253, 208];       // #FFFDD0 near-white core
-const PERIPH_COLOR = [173, 216, 230];  // #ADD8E6 faint blue
-const PERIPH_DIM = [135, 206, 235];    // #87CEEB
-const LINE_COLOR = [100, 149, 237];    // #6495ED pale blue
+// ATHINA neural palette
+const HUB_COLOR = [139, 92, 246];       // #8B5CF6 violet
+const HUB_HOT = [245, 243, 255];        // #F5F3FF violet-white core
+const PERIPH_COLOR = [129, 140, 248];  // #818CF8 soft indigo
+const PERIPH_DIM = [34, 211, 238];      // #22D3EE spatial cyan
+const LINE_COLOR = [124, 58, 237];      // #7C3AED deep violet
 
 function generateHubs(count, radius) {
   const hubs = [];
@@ -192,9 +192,10 @@ export default function AthinaAvatar({ state = 'idle', size = 300 }) {
     const auraCtx = auraCanvas.getContext('2d');
     const auraR = R * 2.6;
     const auraGrad = auraCtx.createRadialGradient(cx, cy, R * 0.1, cx, cy, auraR);
-    auraGrad.addColorStop(0, 'rgba(0, 229, 255, 0.045)');
-    auraGrad.addColorStop(0.4, 'rgba(0, 180, 230, 0.018)');
-    auraGrad.addColorStop(1, 'rgba(0, 64, 128, 0)');
+    auraGrad.addColorStop(0, 'rgba(139, 92, 246, 0.10)');
+    auraGrad.addColorStop(0.45, 'rgba(99, 102, 241, 0.05)');
+    auraGrad.addColorStop(0.75, 'rgba(34, 211, 238, 0.02)');
+    auraGrad.addColorStop(1, 'rgba(7, 8, 22, 0)');
     auraCtx.fillStyle = auraGrad;
     auraCtx.fillRect(0, 0, size, size);
 
@@ -380,7 +381,7 @@ export default function AthinaAvatar({ state = 'idle', size = 300 }) {
         const flowGlow = Math.sin(flow.phase * 2) * 0.5 + 0.5;
         // Wave-lit connections glow brighter
         const waveOnLink = Math.max(ph.waveBoost || 0, pp.waveBoost || 0);
-        ctx.fillStyle = `rgba(255, 253, 208, ${(flowGlow * 0.3 + waveOnLink * 0.4) * cfg.intensity * depthFactor})`;
+        ctx.fillStyle = `rgba(245, 243, 255, ..., ${(flowGlow * 0.3 + waveOnLink * 0.4) * cfg.intensity * depthFactor})`;
         ctx.beginPath();
         ctx.arc(fx, fy, 1.4 + waveOnLink * 1.5, 0, Math.PI * 2);
         ctx.fill();
@@ -418,11 +419,11 @@ export default function AthinaAvatar({ state = 'idle', size = 300 }) {
         // Wave lights up connections it passes through
         const waveOnLink = Math.max(pa.waveBoost || 0, pb.waveBoost || 0);
         const litBoost = waveOnLink * 0.6;
-        ctx.fillStyle = `rgba(255, 253, 208, ${(0.4 + litBoost) * cfg.intensity})`;
+        ctx.fillStyle = `rgba(245, 243, 255, ..., ${(0.4 + litBoost) * cfg.intensity})`;
         ctx.beginPath();
         ctx.arc(f1x, f1y, 1.6 + waveOnLink * 1.5, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = `rgba(255, 253, 208, ${(0.3 + litBoost) * cfg.intensity})`;
+        ctx.fillStyle = `rgba(245, 243, 255, ..., ${(0.3 + litBoost) * cfg.intensity})`;
         ctx.beginPath();
         ctx.arc(f2x, f2y, 1.3 + waveOnLink, 0, Math.PI * 2);
         ctx.fill();
@@ -444,7 +445,7 @@ export default function AthinaAvatar({ state = 'idle', size = 300 }) {
           if (formAlpha > 0.01) {
             const depthFactor = ((pa.depth + pb.depth) / 2 + R) / (R * 2);
             // Brighter, whiter lines — these are "active" new thoughts forming
-            ctx.strokeStyle = `rgba(255, 253, 208, ${formAlpha * depthFactor})`;
+            ctx.strokeStyle = `rgba(245, 243, 255, ..., ${formAlpha * depthFactor})`;
             ctx.lineWidth = 0.5 + depthFactor * 0.3;
             ctx.beginPath();
             ctx.moveTo(pa.sx, pa.sy);
@@ -507,7 +508,7 @@ export default function AthinaAvatar({ state = 'idle', size = 300 }) {
         ctx.fill();
 
         // Hot white core — brightness follows energy + wave (reduced)
-        ctx.fillStyle = `rgba(255, 253, 208, ${(0.12 + ph.energy * 0.18 + ph.waveBoost * 0.25) * cfg.intensity})`;
+        ctx.fillStyle = `rgba(245, 243, 255, ..., ${(0.12 + ph.energy * 0.18 + ph.waveBoost * 0.25) * cfg.intensity})`;
         ctx.beginPath();
         ctx.arc(ph.sx, ph.sy, nodeSize * 0.35, 0, Math.PI * 2);
         ctx.fill();
@@ -525,19 +526,19 @@ export default function AthinaAvatar({ state = 'idle', size = 300 }) {
   }, [size]);
 
   const labels = {
-    idle: 'STANDBY',
-    wake: 'ACTIVE',
-    listening: 'LISTENING',
+    idle: 'Ready',
+    wake: 'Awake',
+    listening: 'Listening',
     thinking: 'PROCESSING',
-    speaking: 'SPEAKING',
+    speaking: 'Speaking',
   };
 
   const labelColors = {
-    idle: '#4a5568',
-    wake: '#00CED1',
-    listening: '#00CED1',
-    thinking: '#00CED1',
-    speaking: '#00CED1',
+    idle: '#8E9AAF',
+    wake: '#A78BFA',
+    listening: '#22D3EE',
+    thinking: '#A78BFA',
+    speaking: '#C4B5FD',
   };
 
   return (
@@ -545,8 +546,14 @@ export default function AthinaAvatar({ state = 'idle', size = 300 }) {
       <canvas ref={canvasRef} style={{ width: size, height: size, background: 'transparent' }} className="block" />
       <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 whitespace-nowrap">
         <span
-          className="text-[11px] font-mono uppercase tracking-[0.35em]"
-          style={{ color: labelColors[state] || labelColors.idle, textShadow: '0 0 12px rgba(0, 206, 209, 0.6)' }}
+          className="text-xs font-medium tracking-wide"
+          style={{
+  color: labelColors[state] || labelColors.idle,
+  textShadow:
+    state === 'idle'
+      ? 'none'
+      : '0 0 14px rgba(139, 92, 246, 0.45)',
+}}
         >
           {labels[state] || labels.idle}
         </span>

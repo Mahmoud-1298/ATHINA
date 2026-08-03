@@ -1,16 +1,20 @@
 import React from 'react';
-import { Radio, Ear, AudioLines, Brain } from 'lucide-react';
+import { AudioLines, Brain, Ear, Radio } from 'lucide-react';
 
-function Waveform({ bars = 5, color = 'bg-cyan-400', active = true }) {
+function Waveform({ bars = 5, tone = 'violet', active = true }) {
+  const colorClass = tone === 'cyan' ? 'bg-cyan-300' : 'bg-violet-300';
+
   return (
-    <div className="flex items-center gap-[2px] h-3">
-      {Array.from({ length: bars }).map((_, i) => (
+    <div className="flex h-3 items-center gap-[2px]" aria-hidden="true">
+      {Array.from({ length: bars }).map((_, index) => (
         <span
-          key={i}
-          className={`w-[2px] rounded-full ${color} ${active ? 'animate-voice-bar' : 'opacity-30'}`}
+          key={index}
+          className={`w-[2px] rounded-full ${colorClass} ${
+            active ? 'animate-voice-bar' : 'opacity-30'
+          }`}
           style={{
-            height: active ? `${30 + ((i * 37) % 70)}%` : '30%',
-            animationDelay: `${i * 0.12}s`,
+            height: active ? `${30 + ((index * 37) % 70)}%` : '30%',
+            animationDelay: `${index * 0.12}s`,
           }}
         />
       ))}
@@ -18,107 +22,128 @@ function Waveform({ bars = 5, color = 'bg-cyan-400', active = true }) {
   );
 }
 
-export default function VoiceStatusIndicator({ state, interimText }) {
-  // state: 'idle' | 'wake' | 'listening' | 'speaking' | 'thinking'
+export default function VoiceStatusIndicator({ state, interimText = '' }) {
   if (state === 'idle') return null;
 
   const configs = {
     wake: {
       icon: Radio,
-      label: 'Listening for "ATHINA"',
-      color: 'cyan',
-      bg: 'bg-cyan-500/5',
-      border: 'border-cyan-500/20',
-      iconColor: 'text-cyan-400',
-      labelColor: 'text-cyan-400/80',
-      ringClass: 'ring-cyan-400/30',
+      label: 'Say “ATHINA”',
+      container: 'border-violet-400/20 bg-violet-500/10',
+      iconColor: 'text-violet-300',
+      labelColor: 'text-violet-100/85',
+      ringClass: 'ring-violet-400/30',
+      pulseColor: 'bg-violet-400/15',
+      waveformTone: 'violet',
     },
     listening: {
       icon: Ear,
       label: 'Listening',
-      color: 'cyan',
-      bg: 'bg-cyan-500/8',
-      border: 'border-cyan-500/25',
+      container: 'border-cyan-300/20 bg-cyan-400/10',
       iconColor: 'text-cyan-300',
-      labelColor: 'text-cyan-300/90',
-      ringClass: 'ring-cyan-300/40',
+      labelColor: 'text-cyan-100/90',
+      ringClass: 'ring-cyan-300/35',
+      pulseColor: 'bg-cyan-300/15',
+      waveformTone: 'cyan',
     },
     speaking: {
       icon: AudioLines,
-      label: 'ATHINA speaking',
-      color: 'cyan',
-      bg: 'bg-cyan-500/8',
-      border: 'border-cyan-500/25',
-      iconColor: 'text-cyan-300',
-      labelColor: 'text-cyan-300/90',
-      ringClass: 'ring-cyan-300/40',
+      label: 'Speaking',
+      container: 'border-violet-300/20 bg-violet-400/10',
+      iconColor: 'text-violet-200',
+      labelColor: 'text-violet-100/90',
+      ringClass: 'ring-violet-300/35',
+      pulseColor: 'bg-violet-300/15',
+      waveformTone: 'violet',
     },
     thinking: {
       icon: Brain,
       label: 'Thinking',
-      color: 'cyan',
-      bg: 'bg-slate-800/30',
-      border: 'border-slate-600/20',
-      iconColor: 'text-slate-400',
-      labelColor: 'text-slate-400/80',
-      ringClass: 'ring-slate-400/20',
+      container: 'border-violet-400/20 bg-violet-500/10',
+      iconColor: 'text-violet-300',
+      labelColor: 'text-violet-100/85',
+      ringClass: 'ring-violet-400/30',
+      pulseColor: 'bg-violet-400/15',
+      waveformTone: 'violet',
     },
   };
 
-  const cfg = configs[state];
-  if (!cfg) return null;
-  const Icon = cfg.icon;
+  const config = configs[state];
+  if (!config) return null;
+
+  const Icon = config.icon;
+  const isListening = state === 'listening';
+  const isSpeaking = state === 'speaking';
+  const isWake = state === 'wake';
 
   return (
-    <div className={`px-3 py-2 border-b border-slate-700/30 ${cfg.bg} shrink-0 transition-all duration-300 ${
-      state === 'listening' || state === 'wake' ? 'shadow-[inset_0_0_30px_-10px_rgba(0,229,255,0.3)]' : ''
-    }`}>
-      <div className="flex items-center gap-2.5">
-        {/* Animated icon with pulse ring */}
-        <div className="relative flex items-center justify-center">
-          {state === 'wake' && (
-            <>
-              <span className="absolute w-6 h-6 rounded-full bg-cyan-400/10 animate-ping-slow" />
-              <span className="absolute w-5 h-5 rounded-full bg-cyan-400/15 animate-ping-slow" style={{ animationDelay: '0.5s' }} />
-            </>
-          )}
-          {state === 'listening' && (
-            <span className="absolute w-5 h-5 rounded-full bg-cyan-300/15 animate-ping" />
-          )}
-          <div className={`relative w-5 h-5 flex items-center justify-center rounded-full ring-1 ${cfg.ringClass} ${state === 'wake' || state === 'listening' ? 'animate-pulse-subtle' : ''}`}>
-            <Icon className={`w-3 h-3 ${cfg.iconColor}`} />
-          </div>
-        </div>
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      className={`inline-flex max-w-full items-center gap-2.5 rounded-full border px-3 py-2 shadow-[0_12px_40px_rgba(0,0,0,0.28)] backdrop-blur-xl transition-all duration-300 ${config.container}`}
+    >
+      <div className="relative flex shrink-0 items-center justify-center">
+        {isWake ? (
+          <>
+            <span
+              className={`absolute h-6 w-6 rounded-full ${config.pulseColor} animate-ping-slow`}
+            />
+            <span
+              className={`absolute h-5 w-5 rounded-full ${config.pulseColor} animate-ping-slow`}
+              style={{ animationDelay: '0.5s' }}
+            />
+          </>
+        ) : null}
 
-        {/* Label */}
-        <span className={`text-[10px] font-mono tracking-wider uppercase ${cfg.labelColor}`}>
-          {cfg.label}
-          {state === 'listening' && interimText ? ' — ' : ''}
-          {state === 'listening' && interimText && (
-            <span className="text-cyan-200/60 normal-case tracking-normal lowercase">{interimText}</span>
-          )}
+        {isListening ? (
+          <span
+            className={`absolute h-5 w-5 rounded-full ${config.pulseColor} animate-ping`}
+          />
+        ) : null}
+
+        <div
+          className={`relative flex h-5 w-5 items-center justify-center rounded-full ring-1 ${config.ringClass} ${
+            isWake || isListening ? 'animate-pulse-subtle' : ''
+          }`}
+        >
+          <Icon className={`h-3 w-3 ${config.iconColor}`} />
+        </div>
+      </div>
+
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className={`shrink-0 text-[11px] font-medium tracking-wide ${config.labelColor}`}>
+          {config.label}
         </span>
 
-        {/* Waveform for speaking/listening */}
-        {(state === 'speaking' || state === 'listening') && (
-          <div className="ml-auto">
-            <Waveform bars={state === 'speaking' ? 7 : 5} active />
-          </div>
-        )}
-
-        {/* Wake mode: subtle scanning dots */}
-        {state === 'wake' && (
-          <div className="ml-auto flex gap-1">
-            {[0, 1, 2].map((i) => (
-              <span
-                key={i}
-                className="w-1 h-1 rounded-full bg-cyan-400/50 animate-pulse"
-                style={{ animationDelay: `${i * 0.3}s` }}
-              />
-            ))}
-          </div>
-        )}
+        {isListening && interimText ? (
+          <span className="max-w-[220px] truncate text-[11px] text-cyan-100/60 sm:max-w-[320px]">
+            {interimText}
+          </span>
+        ) : null}
       </div>
+
+      {isSpeaking || isListening ? (
+        <div className="ml-1 shrink-0">
+          <Waveform
+            bars={isSpeaking ? 7 : 5}
+            tone={config.waveformTone}
+            active
+          />
+        </div>
+      ) : null}
+
+      {isWake ? (
+        <div className="ml-1 flex shrink-0 gap-1" aria-hidden="true">
+          {[0, 1, 2].map((index) => (
+            <span
+              key={index}
+              className="h-1 w-1 animate-pulse rounded-full bg-violet-300/60"
+              style={{ animationDelay: `${index * 0.3}s` }}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
