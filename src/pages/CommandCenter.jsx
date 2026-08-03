@@ -78,18 +78,18 @@ export default function CommandCenter() {
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#070816] text-white">
       {/* Contextual map canvas. It stays fully functional but visually recedes behind ATHINA. */}
-      <div className="absolute inset-0 opacity-80">
+      <div className="absolute inset-0 opacity-90">
         <DarkMap markers={mapMarkers} flyTo={mapFlyTo} />
       </div>
 
       {/* Ambient visual layers create a distinctive ATHINA identity without blocking the map. */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_18%,rgba(139,92,246,0.22),transparent_28%),radial-gradient(circle_at_80%_55%,rgba(34,211,238,0.10),transparent_30%),linear-gradient(180deg,rgba(7,8,22,0.42)_0%,rgba(7,8,22,0.12)_38%,rgba(7,8,22,0.88)_100%)]" />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[48%] bg-gradient-to-t from-[#070816] via-[#070816]/80 to-transparent" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(7,8,22,0.20)_0%,rgba(7,8,22,0.04)_42%,rgba(7,8,22,0.68)_100%)]" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[36%] bg-gradient-to-t from-[#070816]/90 via-[#070816]/45 to-transparent" />
 
       {/* Minimal floating navigation. Every interactive item has a real destination. */}
       <header className="absolute left-1/2 top-4 z-[1200] flex w-[calc(100%-1.5rem)] max-w-6xl -translate-x-1/2 items-center justify-between rounded-2xl border border-white/10 bg-[#0b0d1d]/70 px-3 py-2.5 shadow-2xl shadow-black/30 backdrop-blur-2xl sm:px-4">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="relative grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-cyan-400 shadow-lg shadow-violet-500/20">
+          <div className="relative grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-cyan-400 shadow-lg shadow-black/20">
             <Sparkles className="h-4 w-4 text-white" />
             <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-[#0b0d1d] bg-emerald-400" />
           </div>
@@ -144,9 +144,8 @@ export default function CommandCenter() {
       {/* ATHINA presence on the right, leaving the center open for conversation. */}
       <section className="pointer-events-none absolute -right-16 top-[11%] z-[700] w-[340px] sm:-right-4 sm:top-[10%] lg:right-[3%] lg:top-[12%]">
         <div className="relative flex flex-col items-center">
-          <div className="absolute top-12 h-64 w-64 rounded-full bg-violet-500/15 blur-3xl sm:h-80 sm:w-80" />
           <div className="relative origin-center scale-[0.78] sm:scale-[0.96] lg:scale-110">
-            <AthinaAvatar state={avatarState} size={340} />
+            <AthinaAvatar state={avatarState} size={360} />
           </div>
           <div className="relative -mt-16 text-center sm:-mt-10">
             <p className="text-xs font-medium uppercase tracking-[0.28em] text-violet-200/70">
@@ -183,8 +182,8 @@ export default function CommandCenter() {
         AgentConsole remains unchanged, so all of its existing API and composer behavior is preserved.
         Placing the component here moves its input to the familiar centered-bottom AI layout.
       */}
-      <main className="absolute inset-x-0 bottom-4 z-[1200] mx-auto w-[calc(100%-1.25rem)] max-w-3xl sm:bottom-6 sm:w-[calc(100%-2rem)]">
-        <h2 className="mb-4 text-center text-xl font-semibold tracking-tight text-white drop-shadow-[0_4px_18px_rgba(0,0,0,0.55)] sm:text-2xl">
+      <main className="absolute inset-x-0 bottom-4 z-[1200] mx-auto w-[calc(100%-1.25rem)] max-w-5xl sm:bottom-6 sm:w-[calc(100%-3rem)]">
+       <h2 className="mb-4 text-center text-xl font-semibold tracking-tight text-white drop-shadow-[0_4px_18px_rgba(0,0,0,0.55)] sm:text-2xl">
           How can I help you Mahmoud?
         </h2>
 
@@ -237,7 +236,7 @@ export default function CommandCenter() {
         `}</style>
         <div
           id="athina-chat-shell"
-          className="h-[156px] overflow-hidden rounded-[28px] border border-white/15 bg-[#0b0d1d]/88 shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop-blur-2xl sm:h-[168px]"
+          className="h-[250px] overflow-hidden rounded-[28px] border border-white/15 bg-[#0b0d1d]/88 shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop-blur-2xl sm:h-[168px]"
         >
           <AgentConsole
             onActions={handleActions}
