@@ -175,7 +175,7 @@ const ProposalValidator = () => {
                 <CardContent className="space-y-5">
                   <div className="flex flex-col gap-4 rounded-3xl border border-emerald-400/15 bg-emerald-500/[0.07] p-5 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <p className="text-[11px] uppercase tracking-[0.24em] text-emerald-200/85">Overall score</p>
+                      <p className="text-[11px] uppercase tracking-[0.24em] text-white">Overall score</p>
                       <p className="mt-2 text-4xl font-semibold text-white">{result.overallScore}%</p>
                     </div>
                     <div className={`inline-flex items-center rounded-full border px-4 py-2 text-xs uppercase tracking-[0.22em] ${getDecisionTone(result.decision)}`}>
@@ -211,8 +211,8 @@ const ProposalValidator = () => {
                         ) : null}
                         {category.recommendations.length > 0 ? (
                           <div className="mt-4">
-                            <p className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/70">Recommendations</p>
-                            <div className="mt-2 space-y-2 text-sm text-emerald-50/78">
+                            <p className="text-[11px] uppercase tracking-[0.22em] text-white">Recommendations</p>
+                            <div className="mt-2 space-y-2 text-sm text-white">
                               {category.recommendations.map((recommendation, index) => (
                                 <p key={`${category.key}-rec-${index}`}>{recommendation}</p>
                               ))}

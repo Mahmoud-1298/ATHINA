@@ -25,16 +25,19 @@ const MAX_PROPOSAL_CHARS_PER_CATEGORY = Number(
   process.env.VALIDATOR_MAX_PROPOSAL_CHARS_PER_CATEGORY || 12000
 );
 const RELEVANCE_NAME_MIN_OVERLAP = Number(
-  process.env.VALIDATOR_RELEVANCE_NAME_MIN_OVERLAP || 0.06
+  process.env.VALIDATOR_RELEVANCE_NAME_MIN_OVERLAP || 0.12
 );
 const RELEVANCE_CONTEXT_MIN_OVERLAP = Number(
-  process.env.VALIDATOR_RELEVANCE_CONTEXT_MIN_OVERLAP || 0.08
+  process.env.VALIDATOR_RELEVANCE_CONTEXT_MIN_OVERLAP || 0.16
 );
 const RELEVANCE_COMBINED_MIN_OVERLAP = Number(
-  process.env.VALIDATOR_RELEVANCE_COMBINED_MIN_OVERLAP || 0.1
+  process.env.VALIDATOR_RELEVANCE_COMBINED_MIN_OVERLAP || 0.14
+);
+const RELEVANCE_MIN_NAME_ANCHOR_HITS = Number(
+  process.env.VALIDATOR_RELEVANCE_MIN_NAME_ANCHOR_HITS || 1
 );
 const RELEVANCE_MIN_ANCHOR_HITS = Number(
-  process.env.VALIDATOR_RELEVANCE_MIN_ANCHOR_HITS || 2
+  process.env.VALIDATOR_RELEVANCE_MIN_ANCHOR_HITS || 3
 );
 
 const CATEGORIES = [
@@ -252,6 +255,10 @@ const extractProposalIdentity = (fileName, proposalText) => {
 
 export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles = []) => {
   const identity = extractProposalIdentity(fileName, proposalText);
+  const referenceNameText = (referenceFiles || [])
+    .map((file) => file.name || "")
+    .join("\n");
+  const referenceNameTerms = tokenizeImportantTerms(referenceNameText, 600);
   const referenceIdentitySnippets = (referenceFiles || []).map(
     (file) => `${file.name || ""}\n${trimForPrompt(file.content || "", 1400)}`
   );
@@ -283,6 +290,8 @@ export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles
     ...Array.from(identity.contextTerms),
   ]);
   const anchorHits = Array.from(anchorTerms).filter((term) => proposalTerms.has(term)).length;
+  const nameAnchorHits = Array.from(identity.nameTerms).filter((term) => referenceNameTerms.has(term)).length;
+  const contextAnchorHits = Array.from(identity.contextTerms).filter((term) => anchorTerms.has(term)).length;
 
   const hasMeaningfulName = identity.nameTerms.size > 0;
   const hasMeaningfulContext = identity.contextTerms.size > 0;
@@ -292,23 +301,31 @@ export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles
     contextOverlap >= RELEVANCE_CONTEXT_MIN_OVERLAP &&
     combinedOverlap >= RELEVANCE_COMBINED_MIN_OVERLAP;
   const passesAnchorGate =
-    anchorTerms.size === 0 || anchorHits >= RELEVANCE_MIN_ANCHOR_HITS;
+    (referenceNameTerms.size === 0 || nameAnchorHits >= RELEVANCE_MIN_NAME_ANCHOR_HITS) &&
+    (anchorTerms.size === 0 || contextAnchorHits >= RELEVANCE_MIN_ANCHOR_HITS);
+
+  const severeMismatch =
+    nameOverlap < RELEVANCE_NAME_MIN_OVERLAP * 0.5 ||
+    contextOverlap < RELEVANCE_CONTEXT_MIN_OVERLAP * 0.5;
   const isRelevant =
     hasMeaningfulName &&
     hasMeaningfulContext &&
+    !severeMismatch &&
     (!hasReferenceSignal || (passesOverlapGate && passesAnchorGate));
 
   const mismatchReason =
     "The proposal name/context does not align with the supplied company/solution references. " +
     `name overlap=${Math.round(nameOverlap * 100)}%, context overlap=${Math.round(
       contextOverlap * 100
-    )}%, anchor hits=${anchorHits}.`;
+    )}%, name anchor hits=${nameAnchorHits}, context anchor hits=${contextAnchorHits}, total anchor hits=${anchorHits}.`;
 
   return {
     isRelevant,
     nameOverlap,
     contextOverlap,
     combinedOverlap,
+    nameAnchorHits,
+    contextAnchorHits,
     anchorHits,
     reason: isRelevant
       ? null
