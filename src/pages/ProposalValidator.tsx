@@ -173,7 +173,7 @@ const ProposalValidator = () => {
       ) : null}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-[#535559] text-white shadow-2xl transition-[width,transform] duration-300 lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-[#000000] text-white shadow-2xl transition-[width,transform] duration-300 lg:translate-x-0 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         } ${sidebarCollapsed ? "lg:w-20" : "lg:w-72"}`}
       >
