@@ -187,7 +187,7 @@ const ProposalValidator = () => {
                     <p className="text-sm leading-7 text-white">{result.summary}</p>
                   </div>
 
-                  <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {result.categories.map((category) => (
                       <div key={category.key} className="rounded-2xl border border-emerald-400/12 bg-emerald-500/[0.04] p-4">
                         <div className="mb-3 flex items-center justify-between gap-3">

@@ -374,12 +374,7 @@ export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles
     identityGatePassed;
 
   const mismatchReason =
-    "The proposal does not match the supplied requirement/costing references, so ATHINA treated it as unrelated. " +
-    `name overlap=${Math.round(nameOverlap * 100)}%, context overlap=${Math.round(
-      contextOverlap * 100
-    )}%, requirements overlap=${Math.round(requirementOverlap * 100)}%, costing overlap=${Math.round(
-      costingContextOverlap * 100
-    )}%, pricing number overlap=${Math.round(costingNumericOverlap * 100)}%, name anchor hits=${nameAnchorHits}, context anchor hits=${contextAnchorHits}, total anchor hits=${anchorHits}.`;
+    "The proposal does not match the supplied requirement and costing references.";
 
   return {
     isRelevant,
