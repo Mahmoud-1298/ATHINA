@@ -257,10 +257,7 @@ export default function AgentConsole({ onActions, onAvatarState }) {
   };
 
   const suggestions = [
-    'Weather in Amsterdam',
-    'Show me Tokyo',
-    'GitHub stats',
-    'What time is it?',
+    
   ];
 
   return (
@@ -302,9 +299,7 @@ export default function AgentConsole({ onActions, onAvatarState }) {
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-3">
             <Sparkles className="w-6 h-6 text-cyan-500/30" />
-            <p className="text-slate-400/60 text-xs max-w-[220px] leading-relaxed">
-              I'm ATHINA. Click the power button to turn me on — voice and chat connected. Or type a message below for text-only chat.
-            </p>
+            
             <div className="flex flex-wrap gap-1.5 justify-center mt-1">
               {suggestions.map((s) => (
                 <button
