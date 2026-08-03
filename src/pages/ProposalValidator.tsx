@@ -201,8 +201,8 @@ const ProposalValidator = () => {
                         <p className="mt-4 text-sm leading-6 text-white">{category.assessment || category.achieved}</p>
                         {category.issues.length > 0 ? (
                           <div className="mt-4">
-                            <p className="text-[11px] uppercase tracking-[0.22em] text-white">Gaps</p>
-                            <div className="mt-2 space-y-2 text-sm text-white">
+                            <p className="text-[11px] uppercase tracking-[0.22em] text-red-300">Gaps</p>
+                            <div className="mt-2 space-y-2 text-sm text-red-200">
                               {category.issues.map((issue, index) => (
                                 <p key={`${category.key}-issue-${index}`}>{issue}</p>
                               ))}
@@ -211,8 +211,8 @@ const ProposalValidator = () => {
                         ) : null}
                         {category.recommendations.length > 0 ? (
                           <div className="mt-4">
-                            <p className="text-[11px] uppercase tracking-[0.22em] text-white">Recommendations</p>
-                            <div className="mt-2 space-y-2 text-sm text-white">
+                            <p className="text-[11px] uppercase tracking-[0.22em] text-yellow-300">Recommendations</p>
+                            <div className="mt-2 space-y-2 text-sm text-yellow-200">
                               {category.recommendations.map((recommendation, index) => (
                                 <p key={`${category.key}-rec-${index}`}>{recommendation}</p>
                               ))}

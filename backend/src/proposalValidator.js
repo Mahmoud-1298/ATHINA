@@ -1384,19 +1384,69 @@ export const validateProposalUpload = async ({
   const relevanceGate = evaluateProposalRelevance(fileName, proposalText, referenceFiles);
 
   if (!relevanceGate.isRelevant) {
+    const unrelatedCategoryContent = {
+      legal: {
+        achieved: "No legal alignment could be established with the reference contract basis.",
+        assessment: "This submission appears to belong to a different engagement and does not map to the expected legal scope.",
+        issue: "The legal context does not match the reference requirement package.",
+        recommendation: "Re-submit with the correct client/legal scope and matching contract context.",
+      },
+      finance: {
+        achieved: "Financial terms could not be matched to the expected proposal baseline.",
+        assessment: "The financial structure and payment context look unrelated to the target requirement set.",
+        issue: "Payment and financial framing do not align with the reference set.",
+        recommendation: "Use the expected financial structure and payment context for this opportunity.",
+      },
+      pricing: {
+        achieved: "Pricing signals did not align with the reference commercial package.",
+        assessment: "Commercial pricing appears to belong to a different scope or project.",
+        issue: "Pricing context does not match the provided requirement/costing references.",
+        recommendation: "Align pricing lines and commercial context with the matching requirement and costing files.",
+      },
+      grammar: {
+        achieved: "Writing quality was not deeply assessed because proposal relevance failed at intake.",
+        assessment: "Language quality checks were deprioritized because the proposal appears out of scope.",
+        issue: "Initial relevance gate failed before full writing-quality validation.",
+        recommendation: "Submit the in-scope proposal version first, then run full quality review.",
+      },
+      context: {
+        achieved: "Scope and objectives did not map to the target requirement brief.",
+        assessment: "The business context appears different from the expected project scope.",
+        issue: "Project scope and objectives are not aligned with the reference requirements.",
+        recommendation: "Match the proposal objective, scope, and deliverables to the requirement brief.",
+      },
+      architecture: {
+        achieved: "Technical scope did not correspond to the reference solution expectations.",
+        assessment: "The technical direction appears to reference a different solution context.",
+        issue: "Solution architecture context does not align with the reference technical scope.",
+        recommendation: "Align the technical approach with the intended solution requirements before resubmitting.",
+      },
+    };
+
     const fallbackResult = normalizeValidationResult(
       {
         summary: relevanceGate.reason,
         confidence: 0,
         missingItems: [relevanceGate.reason],
         categories: CATEGORIES.map((category) => ({
+          ...(unrelatedCategoryContent[category.key] || {}),
           key: category.key,
           score: 0,
-          achieved: "No relevant overlap with the reference material was detected.",
-          assessment: `The proposal name/context did not match the reference requirements for ${category.label}.`,
+          achieved:
+            unrelatedCategoryContent[category.key]?.achieved ||
+            "No relevant overlap with the reference material was detected.",
+          assessment:
+            unrelatedCategoryContent[category.key]?.assessment ||
+            `The proposal does not align with the expected ${category.label} context.`,
           strengths: [],
-          issues: [relevanceGate.reason],
-          recommendations: ["Align the proposal title and opening context with the supplied reference scope before resubmitting."],
+          issues: [
+            unrelatedCategoryContent[category.key]?.issue ||
+              "The submission appears unrelated to the supplied requirement and costing references.",
+          ],
+          recommendations: [
+            unrelatedCategoryContent[category.key]?.recommendation ||
+              "Use the matching scope documents and resubmit for full validation.",
+          ],
           referencesUsed: [],
         })),
       },
@@ -1414,8 +1464,6 @@ export const validateProposalUpload = async ({
       ...category,
       score: 0,
       status: "fail",
-      assessment: `The proposal name/context did not match the reference requirements for ${category.label}.`,
-      issues: [relevanceGate.reason],
     }));
 
     const reportId = await saveValidationReport({
