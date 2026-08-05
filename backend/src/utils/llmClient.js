@@ -1,146 +1,402 @@
 import { safeJsonParse } from "./helpers.js";
 
+/*
+ * ATHINA model order
+ * 1. OpenRouter GPT-OSS 120B
+ * 2. OpenRouter Llama 3.3 70B Instruct
+ * 3. Direct Gemini API
+ */
 const PRIMARY_MODEL =
   process.env.ATHINA_PRIMARY_MODEL ||
   process.env.OPENROUTER_MODEL ||
   "openai/gpt-oss-120b";
 
-const FALLBACK_MODELS = (process.env.ATHINA_FALLBACK_MODELS || "")
-  .split(",")
-  .map((value) => value.trim())
-  .filter(Boolean);
+const SECONDARY_MODEL =
+  process.env.ATHINA_SECONDARY_MODEL ||
+  "meta-llama/llama-3.3-70b-instruct";
 
-const FALLBACK_MODEL = FALLBACK_MODELS[0] || "google/gemini-2.5-flash-lite";
+const GEMINI_MODEL =
+  process.env.GEMINI_MODEL ||
+  process.env.Gemini_API_Model ||
+  "gemini-2.5-flash-lite";
+
 const DEFAULT_MODEL = PRIMARY_MODEL;
-const RESPONSE_CACHE = new Map();
-const CACHE_TTL_MS = Number(process.env.LLM_CACHE_TTL_MS) || 5 * 60 * 1000;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.Gemini_API_Key || "";
+const FALLBACK_MODEL = SECONDARY_MODEL;
+const FALLBACK_MODELS = [SECONDARY_MODEL];
 
-const getCacheKey = ({ model, messages, temperature, maxTokens, jsonMode }) =>
-  JSON.stringify({ model, messages, temperature, maxTokens, jsonMode });
+const RESPONSE_CACHE = new Map();
+const CACHE_TTL_MS =
+  Number(process.env.LLM_CACHE_TTL_MS) || 5 * 60 * 1000;
+
+const GEMINI_API_KEY =
+  process.env.GEMINI_API_KEY ||
+  process.env.Gemini_API_Key ||
+  "";
+
+const OPENROUTER_TIMEOUT_MS =
+  Number(process.env.OPENROUTER_TIMEOUT_MS) || 90_000;
+const GEMINI_TIMEOUT_MS =
+  Number(process.env.GEMINI_TIMEOUT_MS) || 90_000;
+
+const getCacheKey = ({
+  model,
+  messages,
+  temperature,
+  maxTokens,
+  jsonMode,
+}) =>
+  JSON.stringify({
+    model,
+    messages,
+    temperature,
+    maxTokens,
+    jsonMode,
+  });
 
 const getCachedResponse = (key) => {
   const entry = RESPONSE_CACHE.get(key);
   if (!entry) return null;
+
   if (entry.expiresAt < Date.now()) {
     RESPONSE_CACHE.delete(key);
     return null;
   }
+
   return entry.value;
 };
 
 const setCachedResponse = (key, value) => {
-  RESPONSE_CACHE.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+  RESPONSE_CACHE.set(key, {
+    value,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
 };
 
-const buildGeminiPayload = (messages, temperature, maxTokens, jsonMode) => {
+const sleep = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const fetchWithTimeout = async (
+  url,
+  options,
+  timeoutMs,
+) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    timeoutMs,
+  );
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(
+        `LLM request timed out after ${timeoutMs}ms.`,
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+/*
+ * Some models occasionally wrap a valid JSON object in markdown fences or
+ * explanatory text. This helper keeps strict parsing first, then safely tries
+ * the first complete JSON object/array found in the response.
+ */
+const extractBalancedJson = (text) => {
+  const source = String(text || "").trim();
+  if (!source) return null;
+
+  const direct = safeJsonParse(source);
+  if (direct) return direct;
+
+  const withoutFences = source
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  const unfenced = safeJsonParse(withoutFences);
+  if (unfenced) return unfenced;
+
+  const startIndexes = [
+    withoutFences.indexOf("{"),
+    withoutFences.indexOf("["),
+  ].filter((index) => index >= 0);
+
+  if (!startIndexes.length) return null;
+
+  const start = Math.min(...startIndexes);
+  const opening = withoutFences[start];
+  const closing = opening === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < withoutFences.length; index += 1) {
+    const character = withoutFences[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (character === opening) depth += 1;
+    if (character === closing) depth -= 1;
+
+    if (depth === 0) {
+      const candidate = withoutFences.slice(start, index + 1);
+      return safeJsonParse(candidate);
+    }
+  }
+
+  return null;
+};
+
+const buildGeminiPayload = (
+  messages,
+  temperature,
+  maxTokens,
+  jsonMode,
+) => {
   const systemText = messages
-    .filter((m) => m.role === "system")
-    .map((m) => String(m.content || ""))
+    .filter((message) => message.role === "system")
+    .map((message) => String(message.content || ""))
     .join("\n\n");
 
   const conversationText = messages
-    .filter((m) => m.role !== "system")
-    .map((m) => {
-      const role = m.role === "assistant" ? "Assistant" : "User";
-      return role + ": " + String(m.content || "");
+    .filter((message) => message.role !== "system")
+    .map((message) => {
+      const role =
+        message.role === "assistant" ? "Assistant" : "User";
+      return `${role}: ${String(message.content || "")}`;
     })
     .join("\n\n");
 
   const prompt = [
     systemText,
-    jsonMode ? "CRITICAL: Return ONLY valid JSON. No markdown, no code fences, no extra text." : "",
+    jsonMode
+      ? "CRITICAL: Return ONLY one valid JSON value. Do not use markdown, code fences, analysis, or additional text."
+      : "",
     conversationText,
-  ].filter(Boolean).join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   return {
-    contents: [{
-      role: "user",
-      parts: [{ text: prompt }],
-    }],
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }],
+      },
+    ],
     generationConfig: {
       temperature,
       maxOutputTokens: maxTokens,
-      ...(jsonMode ? { responseMimeType: "application/json" } : {}),
+      ...(jsonMode
+        ? { responseMimeType: "application/json" }
+        : {}),
     },
   };
 };
 
-const tryGeminiModel = async (model, messages, temperature, maxTokens, jsonMode) => {
+const tryGeminiModel = async (
+  model,
+  messages,
+  temperature,
+  maxTokens,
+  jsonMode,
+) => {
   if (!GEMINI_API_KEY) {
-    throw new Error("Missing GEMINI_API_KEY (or Gemini_API_Key) environment variable.");
+    throw new Error(
+      "Missing GEMINI_API_KEY (or Gemini_API_Key) environment variable.",
+    );
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildGeminiPayload(messages, temperature, maxTokens, jsonMode)),
-  });
+  const endpoint =
+    `https://generativelanguage.googleapis.com/v1beta/models/` +
+    `${encodeURIComponent(model)}:generateContent?key=` +
+    encodeURIComponent(GEMINI_API_KEY);
+
+  const response = await fetchWithTimeout(
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(
+        buildGeminiPayload(
+          messages,
+          temperature,
+          maxTokens,
+          jsonMode,
+        ),
+      ),
+    },
+    GEMINI_TIMEOUT_MS,
+  );
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error("Gemini error " + response.status + ": " + errorText);
+    throw new Error(
+      `Gemini error ${response.status}: ${errorText}`,
+    );
   }
 
   const data = await response.json();
-  const content = data?.candidates?.[0]?.content?.parts?.map((part) => part?.text || "").join("") || "";
-  if (!content) throw new Error("Empty response from Gemini model " + model);
+  const candidate = data?.candidates?.[0];
+  const content =
+    candidate?.content?.parts
+      ?.map((part) => part?.text || "")
+      .join("") || "";
+
+  if (!content) {
+    const finishReason = candidate?.finishReason || "unknown";
+    throw new Error(
+      `Empty response from Gemini model ${model} ` +
+        `(finishReason=${finishReason})`,
+    );
+  }
 
   if (jsonMode) {
-    const parsed = safeJsonParse(content);
-    if (!parsed) throw new Error("Failed to parse JSON from Gemini model " + model);
+    const parsed = extractBalancedJson(content);
+    if (!parsed) {
+      throw new Error(
+        `Failed to parse JSON from Gemini model ${model}`,
+      );
+    }
     return parsed;
   }
 
   return content;
 };
 
-export const callOpenRouter = async (payload, maxRetries = 3) => {
+export const callOpenRouter = async (
+  payload,
+  maxRetries = 3,
+) => {
   if (!process.env.OPENROUTER_API_KEY) {
-    throw new Error("Missing OPENROUTER_API_KEY environment variable.");
+    throw new Error(
+      "Missing OPENROUTER_API_KEY environment variable.",
+    );
   }
+
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + process.env.OPENROUTER_API_KEY,
-        "Content-Type": "application/json",
-        "HTTP-Referer": process.env.PUBLIC_APP_URL || "https://athina.ai",
-        "X-Title": "ATHINA",
+    const response = await fetchWithTimeout(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization:
+            "Bearer " + process.env.OPENROUTER_API_KEY,
+          "Content-Type": "application/json",
+          "HTTP-Referer":
+            process.env.PUBLIC_APP_URL || "https://athina.ai",
+          "X-Title": "ATHINA",
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload),
-    });
+      OPENROUTER_TIMEOUT_MS,
+    );
+
     if (response.status === 429 && attempt < maxRetries) {
-      const retryAfter = Number(response.headers.get("retry-after")) || Math.pow(2, attempt);
-      await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+      const retryAfter =
+        Number(response.headers.get("retry-after")) ||
+        Math.pow(2, attempt);
+      await sleep(retryAfter * 1000);
       continue;
     }
+
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error("OpenRouter error " + response.status + ": " + errorText);
+      throw new Error(
+        `OpenRouter error ${response.status}: ${errorText}`,
+      );
     }
+
     return response;
   }
-  throw new Error("OpenRouter request failed after retries.");
+
+  throw new Error(
+    "OpenRouter request failed after retries.",
+  );
 };
 
-const buildOpenRouterPayload = (model, messages, temperature, maxTokens, jsonMode) => {
+const buildOpenRouterPayload = (
+  model,
+  messages,
+  temperature,
+  maxTokens,
+  jsonMode,
+) => {
   let adjustedMessages = messages;
-  // Skip response_format for free models - many don't support it
-  const useResponseFormat = jsonMode && !model.includes(":free") && model !== "openrouter/free";
+
+  const useResponseFormat =
+    jsonMode &&
+    !model.includes(":free") &&
+    model !== "openrouter/free";
+
   if (jsonMode) {
-    adjustedMessages = messages.map((m) =>
-      m.role === "system"
-        ? { ...m, content: m.content + "\n\nCRITICAL: Return ONLY valid JSON. No markdown, no code fences, no extra text." }
-        : m
+    adjustedMessages = messages.map((message) =>
+      message.role === "system"
+        ? {
+            ...message,
+            content:
+              String(message.content || "") +
+              "\n\nCRITICAL: Return ONLY one valid JSON value. " +
+              "Do not use markdown, code fences, analysis, or extra text.",
+          }
+        : message,
     );
-    if (!adjustedMessages.some((m) => m.role === "system")) {
-      adjustedMessages = [{ role: "system", content: "CRITICAL: Return ONLY valid JSON. No markdown, no code fences, no extra text." }, ...adjustedMessages];
+
+    if (
+      !adjustedMessages.some(
+        (message) => message.role === "system",
+      )
+    ) {
+      adjustedMessages = [
+        {
+          role: "system",
+          content:
+            "CRITICAL: Return ONLY one valid JSON value. " +
+            "Do not use markdown, code fences, analysis, or extra text.",
+        },
+        ...adjustedMessages,
+      ];
     }
   }
-  const payload = { model, messages: adjustedMessages, stream: false, temperature, max_tokens: maxTokens };
-  if (useResponseFormat) payload.response_format = { type: "json_object" };
+
+  const payload = {
+    model,
+    messages: adjustedMessages,
+    stream: false,
+    temperature,
+    max_tokens: maxTokens,
+  };
+
+  if (useResponseFormat) {
+    payload.response_format = {
+      type: "json_object",
+    };
+  }
+
   return payload;
 };
 
@@ -165,103 +421,172 @@ const extractMessageContent = (message) => {
   return "";
 };
 
-const tryModel = async (model, messages, temperature, maxTokens, jsonMode) => {
-  const response = await callOpenRouter(buildOpenRouterPayload(model, messages, temperature, maxTokens, jsonMode));
-  const data = await response.json();
-  const content = extractMessageContent(data?.choices?.[0]?.message);
-
-  if (!content) {
-    const finishReason = data?.choices?.[0]?.finish_reason || "unknown";
-    throw new Error(
-      "Empty response from model " + model + " (finish_reason=" + finishReason + ")"
-    );
-  }
-
-  if (jsonMode) {
-    const parsed = safeJsonParse(content);
-    if (!parsed) throw new Error("Failed to parse JSON from model " + model);
-    return parsed;
-  }
-  return content;
-};
-
-export const callLLM = async ({ messages, model, temperature = 0.3, maxTokens = 4000, jsonMode = false }) => {
-  const primaryModel = model || PRIMARY_MODEL;
-  const modelChain = [
-    primaryModel,
-    ...FALLBACK_MODELS.filter((candidate) => candidate !== primaryModel),
-  ];
-
-  const failures = [];
-
-  for (const candidate of modelChain) {
-    const cacheKey = getCacheKey({
-      model: candidate,
+const tryOpenRouterModel = async (
+  model,
+  messages,
+  temperature,
+  maxTokens,
+  jsonMode,
+) => {
+  const response = await callOpenRouter(
+    buildOpenRouterPayload(
+      model,
       messages,
       temperature,
       maxTokens,
       jsonMode,
-    });
+    ),
+  );
 
-    const cached = getCachedResponse(cacheKey);
-    if (cached !== null) return cached;
+  const data = await response.json();
+  const choice = data?.choices?.[0];
+  const content = extractMessageContent(choice?.message);
 
-    try {
-      const result = await tryModel(
-        candidate,
-        messages,
-        temperature,
-        maxTokens,
-        jsonMode
-      );
-
-      setCachedResponse(cacheKey, result);
-      return result;
-    } catch (error) {
-      failures.push(`${candidate}: ${error.message}`);
-      console.warn(
-        `[LLM] Model "${candidate}" failed. Trying next fallback.`,
-        error.message
-      );
-    }
+  if (!content) {
+    const finishReason = choice?.finish_reason || "unknown";
+    throw new Error(
+      `Empty response from model ${model} ` +
+        `(finish_reason=${finishReason})`,
+    );
   }
 
-  if (GEMINI_API_KEY) {
-    try {
-      const directGeminiModel =
-        process.env.GEMINI_MODEL ||
-        process.env.Gemini_API_Model ||
-        "gemini-2.5-flash-lite";
+  if (jsonMode) {
+    const parsed = extractBalancedJson(content);
+    if (!parsed) {
+      throw new Error(
+        `Failed to parse JSON from model ${model}`,
+      );
+    }
+    return parsed;
+  }
 
-      const cacheKey = getCacheKey({
-        model: `direct-gemini:${directGeminiModel}`,
+  return content;
+};
+
+const callCachedModel = async ({
+  provider,
+  model,
+  messages,
+  temperature,
+  maxTokens,
+  jsonMode,
+}) => {
+  const cacheModel = `${provider}:${model}`;
+  const cacheKey = getCacheKey({
+    model: cacheModel,
+    messages,
+    temperature,
+    maxTokens,
+    jsonMode,
+  });
+
+  const cached = getCachedResponse(cacheKey);
+  if (cached !== null) {
+    console.info(`[LLM] Cache hit for ${cacheModel}`);
+    return cached;
+  }
+
+  const startedAt = Date.now();
+  const result =
+    provider === "gemini"
+      ? await tryGeminiModel(
+          model,
+          messages,
+          temperature,
+          maxTokens,
+          jsonMode,
+        )
+      : await tryOpenRouterModel(
+          model,
+          messages,
+          temperature,
+          maxTokens,
+          jsonMode,
+        );
+
+  setCachedResponse(cacheKey, result);
+
+  console.info("[LLM] Model completed", {
+    provider,
+    model,
+    jsonMode,
+    durationMs: Date.now() - startedAt,
+  });
+
+  return result;
+};
+
+export const callLLM = async ({
+  messages,
+  model,
+  temperature = 0.3,
+  maxTokens = 4000,
+  jsonMode = false,
+}) => {
+  const requestedPrimary = model || PRIMARY_MODEL;
+
+  // Exactly two OpenRouter attempts, followed by direct Gemini.
+  const openRouterModels = Array.from(
+    new Set([requestedPrimary, SECONDARY_MODEL]),
+  );
+
+  const failures = [];
+
+  for (const candidate of openRouterModels) {
+    try {
+      return await callCachedModel({
+        provider: "openrouter",
+        model: candidate,
         messages,
         temperature,
         maxTokens,
         jsonMode,
       });
+    } catch (error) {
+      failures.push(
+        `openrouter/${candidate}: ${error.message}`,
+      );
+      console.warn(
+        `[LLM] OpenRouter model "${candidate}" failed. ` +
+          "Trying next model.",
+        error.message,
+      );
+    }
+  }
 
-      const cached = getCachedResponse(cacheKey);
-      if (cached !== null) return cached;
-
-      const result = await tryGeminiModel(
-        directGeminiModel,
+  if (!GEMINI_API_KEY) {
+    failures.push(
+      "direct-gemini: GEMINI_API_KEY is not configured",
+    );
+  } else {
+    try {
+      return await callCachedModel({
+        provider: "gemini",
+        model: GEMINI_MODEL,
         messages,
         temperature,
         maxTokens,
-        jsonMode
-      );
-
-      setCachedResponse(cacheKey, result);
-      return result;
+        jsonMode,
+      });
     } catch (error) {
-      failures.push(`direct-gemini: ${error.message}`);
+      failures.push(`direct-gemini/${GEMINI_MODEL}: ${error.message}`);
+      console.warn(
+        `[LLM] Gemini model "${GEMINI_MODEL}" failed.`,
+        error.message,
+      );
     }
   }
 
   throw new Error(
-    "All configured LLM models failed. " + failures.join(" | ")
+    "All configured LLM models failed. " + failures.join(" | "),
   );
 };
 
-export { PRIMARY_MODEL, FALLBACK_MODEL, DEFAULT_MODEL };
+export {
+  PRIMARY_MODEL,
+  SECONDARY_MODEL,
+  GEMINI_MODEL,
+  FALLBACK_MODELS,
+  FALLBACK_MODEL,
+  DEFAULT_MODEL,
+};
