@@ -425,13 +425,13 @@ export const execute = async (params = {}) => {
 
 export const schema = {
   description: "Read and manage calendar events through Google Calendar, with an ICS preparation fallback.",
-  actions: ["create_event", "list_events", "check_availability", "ensure_slot"],
+  actions: ["create_event", "list_events", "check_availability", "ensure_slot", "create_event", "list_events", "get_event", "find_event", "check_availability", "ensure_slot", "update_event", "move_event", "delete_event"],
   parameters: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["create_event", "list_events", "check_availability", "ensure_slot"],
+        enum: ["create_event", "list_events", "check_availability", "ensure_slot", "create_event", "list_events", "get_event", "find_event", "check_availability", "ensure_slot", "update_event", "move_event", "delete_event"],
       },
       title: { type: "string" },
       datetime: { type: "string", description: "ISO start date-time." },
