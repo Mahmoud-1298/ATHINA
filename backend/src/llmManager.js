@@ -147,6 +147,12 @@ export const getQuickReply = (message) => {
   return null;
 };
 
+const calendarReply =
+  buildCalendarReply(executed);
+
+if (calendarReply) {
+  return calendarReply;
+}
 export const buildCompactExecutionReply = async (executed) => {
   if (!Array.isArray(executed) || executed.length === 0) {
     return "I'm here. How can I help?";
@@ -171,9 +177,65 @@ export const buildCompactExecutionReply = async (executed) => {
       const urls = (result.results || []).map((r) => r.url).join(", ");
       return '- Searched web for "' + result.query + '". Found URLs: ' + urls;
     }
+    
     if (result.type === "calendar") {
-      return "- Created calendar event: " + (result.title || task.description);
+
+  const action =
+    String(result.action || "")
+      .toLowerCase();
+
+  if (action === "list_events") {
+
+    const count =
+      Number(result.count || 0);
+
+    if (count === 0) {
+      return "- Calendar query completed. No events found.";
     }
+
+    const events =
+      (result.events || [])
+        .slice(0, 10)
+        .map(event =>
+          `${event.title || "Untitled"} (${event.start || "unknown time"})`
+        )
+        .join("; ");
+
+    return `- Listed ${count} calendar event(s): ${events}`;
+  }
+
+  if (action === "check_availability") {
+    return result.isFree
+      ? "- Calendar availability check completed. The requested time slot is free."
+      : "- Calendar availability check completed. The requested time slot contains conflicts.";
+  }
+
+  if (
+    action === "create_event" ||
+    action === "ensure_slot"
+  ) {
+    return "- Created calendar event: " +
+           (result.title || task.description);
+  }
+
+  if (action === "update_event") {
+    return "- Updated calendar event: " +
+           (result.title || task.description);
+  }
+
+  if (action === "move_event") {
+    return "- Rescheduled calendar event: " +
+           (result.title || task.description);
+  }
+
+  if (action === "delete_event") {
+    return "- Deleted calendar event successfully.";
+  }
+
+  return "- Completed calendar action: " +
+         action;
+    }
+    
     if (result.type === "email") {
       const action = String(result.action || "").toLowerCase();
       if (action === "send") {
