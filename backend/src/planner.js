@@ -35,10 +35,10 @@ const ACTION_PATTERNS = {
     /\b(read|open|check|list|show|find|summarize|summarise|summary)\b[\s\S]*\b(email|e-mail|mail|inbox)\b|\b(last email|latest email|recent email|inbox)\b/i,
 
   calendarWrite:
-    /\b(schedule|book|create|add|set up|setup|arrange|organize|organise|move|reschedule|cancel|delete|remove)\b[\s\S]*\b(meeting|calendar event|calendar invite|appointment|reminder)\b/i,
+    /\b(schedule|book|create|add|set up|setup|arrange|organize|organise|move|reschedule|cancel|delete|remove)\b[\s\S]*\b(meeting|meetings|event|events|calendar event|calendar invite|appointment|appointments|reminder)\b/i,
 
   calendarRead:
-    /\b(check|show|list|read|find|do i have|am i free|available|availability)\b[\s\S]*\b(calendar|meeting|event|appointment|schedule)\b|\b(calendar|schedule)\b[\s\S]*\b(check|show|list|free|available|availability)\b/i,
+    /\b(check|show|list|read|find|do i have|am i free|available|availability|today|tomorrow|next)\b[\s\S]*\b(calendar|agenda|meeting|meetings|event|events|appointment|appointments|schedule)\b/i,
 
   maps:
     /\b(show|find|locate|pin|point to|navigate to)\b[\s\S]*\b(location|place|address|map)\b|\b(directions to|near me|on the map)\b/i,
