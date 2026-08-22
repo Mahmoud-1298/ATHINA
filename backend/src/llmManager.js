@@ -147,12 +147,6 @@ export const getQuickReply = (message) => {
   return null;
 };
 
-const calendarReply =
-  buildCalendarReply(executed);
-
-if (calendarReply) {
-  return calendarReply;
-}
 export const buildCompactExecutionReply = async (executed) => {
   if (!Array.isArray(executed) || executed.length === 0) {
     return "I'm here. How can I help?";
