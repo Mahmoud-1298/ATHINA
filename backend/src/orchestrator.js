@@ -985,10 +985,23 @@ const handlePendingMeetingWorkflow = async ({
     };
   }
 
-  await clearPendingMeetingContext(
-    sessionId,
-    userId
-  );
+  await saveContext(
+  sessionId,
+  LAST_MEETING_METADATA_KEY,
+  {
+    title: meeting.title,
+    attendees: meeting.attendees,
+    start: meeting.start,
+    end: meeting.end,
+    location: meeting.location,
+  },
+  userId
+);
+
+await clearPendingMeetingContext(
+  sessionId,
+  userId
+);
 
   return {
     success: true,
@@ -1336,28 +1349,55 @@ const loadRelevantMemories = async ({
   sessionId,
 }) => {
   try {
-    const embedding = await getEmbedding(
-      [message, locationNote]
-        .filter(Boolean)
-        .join("\n")
-    );
+    const embeddingText = [message, locationNote]
+      .filter(Boolean)
+      .join("\n");
 
-    if (!embedding) return [];
+    const embedding = await getEmbedding(embeddingText);
 
-    return await searchMemoryEmbeddings({
+    if (!embedding) {
+      const history = await getHistory(sessionId, 6, userId);
+      return history
+        .slice(-6)
+        .map((entry) => ({
+          content: `${entry.role}: ${entry.content}`,
+          similarity: 0.5,
+          source: "history_fallback",
+        }));
+    }
+
+    const memories = await searchMemoryEmbeddings({
       sessionId,
       userId,
       embedding,
       limit: 4,
       minSimilarity: 0.74,
     });
+
+    if (memories.length > 0) return memories;
+
+    const history = await getHistory(sessionId, 6, userId);
+    return history
+      .slice(-6)
+      .map((entry) => ({
+        content: `${entry.role}: ${entry.content}`,
+        similarity: 0.5,
+        source: "history_fallback",
+      }));
   } catch (error) {
     console.warn(
       "[ATHINA] Semantic memory lookup skipped:",
       error.message
     );
 
-    return [];
+    const history = await getHistory(sessionId, 6, userId).catch(() => []);
+    return history
+      .slice(-6)
+      .map((entry) => ({
+        content: `${entry.role}: ${entry.content}`,
+        similarity: 0.5,
+        source: "history_fallback",
+      }));
   }
 };
 

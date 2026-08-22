@@ -130,7 +130,7 @@ const QUICK_REPLIES = [
   },
   {
     patterns: [/^(what can you do|help|what do you do)$/i],
-    reply: "I can answer questions, search the web, locate places, and handle supported actions.",
+    reply: "I can be your personal assistant, schedule meetings, send & read emails, answer questions, search the web, locate places, and handle supported actions.",
   },
 ];
 
