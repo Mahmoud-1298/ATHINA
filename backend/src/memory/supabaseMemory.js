@@ -55,14 +55,77 @@ export const getHistory = async (sessionId, limit = 20, userId = null) => {
     const { data } = await applyScope(
       sb
       .from("athina_memory")
-      .select("role, content")
+      .select("role, content, created_at")
       , scope.userId, scope.sessionId)
       .order("created_at", { ascending: true })
       .limit(limit);
-    return (data || []).map((r) => ({ role: r.role, content: r.content }));
+    return (data || []).map((r) => ({ role: r.role, content: r.content, createdAt: r.created_at }));
   }
   const history = memoryFallback.get(scope.userId || scope.sessionId) || [];
   return history.slice(-limit);
+};
+
+export const getDateMemoryWindow = (message, now = new Date()) => {
+  const text = String(message || "").toLowerCase();
+  const hasDateQuestion = /(yesterday|today|last night|last week|last month|this morning|this afternoon|last friday|last monday|yesterday morning|yesterday afternoon)/i.test(text);
+  if (!hasDateQuestion) return null;
+
+  const dateMatch = /(yesterday|today|last night|this morning|this afternoon)/i.exec(text);
+  if (!dateMatch) return null;
+
+  const base = new Date(now);
+  base.setHours(0, 0, 0, 0);
+
+  if (/yesterday/i.test(dateMatch[0])) {
+    base.setDate(base.getDate() - 1);
+    return {
+      label: "yesterday",
+      start: new Date(base),
+      end: new Date(base),
+    };
+  }
+
+  if (/today/i.test(dateMatch[0])) {
+    return {
+      label: "today",
+      start: new Date(base),
+      end: new Date(base),
+    };
+  }
+
+  return null;
+};
+
+export const getHistoryByDateRange = async ({ sessionId, userId = null, start, end, limit = 50 }) => {
+  const scope = normalizeScope(userId, sessionId);
+  const sb = getSupabase();
+  if (!sb) {
+    const history = memoryFallback.get(scope.userId || scope.sessionId) || [];
+    return history.filter((entry) => {
+      const ts = new Date(entry.createdAt || Date.now()).valueOf();
+      return ts >= new Date(start).valueOf() && ts <= new Date(end).valueOf();
+    }).slice(-limit);
+  }
+
+  const startIso = new Date(start).toISOString();
+  const endIso = new Date(end).toISOString();
+
+  let query = sb
+    .from("athina_memory")
+    .select("role, content, created_at")
+    .gte("created_at", startIso)
+    .lte("created_at", endIso)
+    .order("created_at", { ascending: true })
+    .limit(limit);
+
+  if (scope.userId) {
+    query = query.eq("user_id", scope.userId);
+  } else {
+    query = query.eq("session_id", scope.sessionId);
+  }
+
+  const { data } = await query;
+  return (data || []).map((row) => ({ role: row.role, content: row.content, createdAt: row.created_at }));
 };
 
 export const saveTurn = async (sessionId, userMessage, assistantMessage, userId = null) => {

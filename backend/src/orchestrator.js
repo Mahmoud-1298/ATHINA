@@ -1,7 +1,9 @@
 import {
   findCachedAnswer,
   getContext,
+  getDateMemoryWindow,
   getHistory,
+  getHistoryByDateRange,
   markCachedAnswerHit,
   saveCachedAnswer,
   saveContext,
@@ -1848,6 +1850,19 @@ export const orchestrate = async ({
      8. HISTORY AND SEMANTIC MEMORY
      --------------------------------------------------------- */
 
+  const dateMemoryWindow = getDateMemoryWindow(normalizedMessage);
+
+  let historicalMemoryEntries = [];
+  if (dateMemoryWindow) {
+    historicalMemoryEntries = await getHistoryByDateRange({
+      sessionId,
+      userId,
+      start: dateMemoryWindow.start,
+      end: dateMemoryWindow.end,
+      limit: 30,
+    });
+  }
+
   const history = await getHistory(
     sessionId,
     8,
@@ -1862,9 +1877,14 @@ export const orchestrate = async ({
       sessionId,
     });
 
-  const memoryNote = buildMemoryNote(
-    relevantMemories
-  );
+  const memoryNote = buildMemoryNote([
+    ...historicalMemoryEntries.map((entry) => ({
+      content: `${entry.createdAt ? new Date(entry.createdAt).toISOString().slice(0, 10) : 'date'} — ${entry.role}: ${entry.content}`,
+      similarity: 1,
+      source: 'date_history',
+    })),
+    ...relevantMemories,
+  ]);
 
   /* ---------------------------------------------------------
      9. PLANNING
