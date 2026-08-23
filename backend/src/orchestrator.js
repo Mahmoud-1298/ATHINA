@@ -43,6 +43,7 @@ const normalizeCacheText = (text) =>
     .slice(0, 500);
 
 const PENDING_MEETING_CONTEXT_KEY = "pending_meeting_request";
+const LAST_MEETING_METADATA_KEY = "last_meeting_metadata";
 
 const MONTH_INDEX = {
   january: 0,
@@ -97,11 +98,23 @@ const hasEmailIntent = (message) => {
     );
 
   const directPhrases =
-    /\b(last email|latest email|email me|send it by email|send an email|send email|draft an email|write an email|compose an email)\b/i.test(
+    /\b(last email|latest email|email me|email him|email her|email them|send it by email|send an email|send email|draft an email|write an email|compose an email)\b/i.test(
       text
     );
 
   return directPhrases || (emailNoun && emailAction);
+};
+
+export const shouldBypassDirectMeetingWorkflow = (
+  message
+) => {
+  const text = String(message || "").trim();
+  if (!text) return false;
+
+  return (
+    hasExplicitMeetingIntent(text) &&
+    hasEmailIntent(text)
+  );
 };
 
 /**
@@ -805,6 +818,43 @@ const clearPendingMeetingContext = async (
   );
 };
 
+const safelyPersistMeetingMetadata = async ({
+  sessionId,
+  userId,
+  meeting,
+}) => {
+  try {
+    await saveContext(
+      sessionId,
+      LAST_MEETING_METADATA_KEY,
+      {
+        title: meeting.title,
+        attendees: meeting.attendees,
+        start: meeting.start,
+        end: meeting.end,
+        location: meeting.location,
+      },
+      userId
+    );
+
+    await clearPendingMeetingContext(
+      sessionId,
+      userId
+    );
+  } catch (error) {
+    console.warn(
+      "[ATHINA][MEETING] Non-fatal context persistence failure after successful event creation:",
+      {
+        sessionId,
+        userId,
+        error:
+          error?.message ||
+          "Unknown context persistence error",
+      }
+    );
+  }
+};
+
 const handlePendingMeetingWorkflow = async ({
   message,
   sessionId,
@@ -987,23 +1037,11 @@ const handlePendingMeetingWorkflow = async ({
     };
   }
 
-  await saveContext(
-  sessionId,
-  LAST_MEETING_METADATA_KEY,
-  {
-    title: meeting.title,
-    attendees: meeting.attendees,
-    start: meeting.start,
-    end: meeting.end,
-    location: meeting.location,
-  },
-  userId
-);
-
-await clearPendingMeetingContext(
-  sessionId,
-  userId
-);
+  await safelyPersistMeetingMetadata({
+    sessionId,
+    userId,
+    meeting,
+  });
 
   return {
     success: true,
@@ -1629,39 +1667,49 @@ export const orchestrate = async ({
      meeting. Unrelated requests bypass the meeting workflow.
      --------------------------------------------------------- */
 
-  const pendingMeetingResult =
-    await handlePendingMeetingWorkflow({
-      message: normalizedMessage,
-      sessionId,
-      userId,
-    });
-
-  if (pendingMeetingResult) {
+  if (
+    shouldBypassDirectMeetingWorkflow(
+      normalizedMessage
+    )
+  ) {
     console.log(
-      "[ATHINA][ROUTING] Meeting workflow handled the request."
+      "[ATHINA][ROUTING] Mixed meeting+email intent detected. Bypassing direct meeting workflow and deferring to planner decomposition."
     );
+  } else {
+    const pendingMeetingResult =
+      await handlePendingMeetingWorkflow({
+        message: normalizedMessage,
+        sessionId,
+        userId,
+      });
 
-    await saveTurn(
-      sessionId,
-      normalizedMessage,
-      pendingMeetingResult.reply,
-      userId
-    );
+    if (pendingMeetingResult) {
+      console.log(
+        "[ATHINA][ROUTING] Meeting workflow handled the request."
+      );
 
-    return {
-      success: Boolean(
-        pendingMeetingResult.success
-      ),
-      reply: pendingMeetingResult.reply,
-      actions:
-        pendingMeetingResult.actions || [],
-      sessionId,
-      timestamp: timestamp(),
-      directAction: true,
-      workflowCleared: Boolean(
-        pendingMeetingResult.workflowCleared
-      ),
-    };
+      await saveTurn(
+        sessionId,
+        normalizedMessage,
+        pendingMeetingResult.reply,
+        userId
+      );
+
+      return {
+        success: Boolean(
+          pendingMeetingResult.success
+        ),
+        reply: pendingMeetingResult.reply,
+        actions:
+          pendingMeetingResult.actions || [],
+        sessionId,
+        timestamp: timestamp(),
+        directAction: true,
+        workflowCleared: Boolean(
+          pendingMeetingResult.workflowCleared
+        ),
+      };
+    }
   }
 
   const pendingMeeting = await getContext(
