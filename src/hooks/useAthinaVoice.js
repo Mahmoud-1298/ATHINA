@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { invokeFunction } from '@/lib/functionApi';
+import { speakText as requestSpeech } from '@/lib/athinaApi';
 
 const WAKE_WORD_PATTERN = /\b(hey|hi|hello)?\s*athina\b/i;
 const END_OF_SPEECH_MS = 700;
 const WAKE_HOLD_MS = 6000;
 
 const getSpeechRecognitionCtor = () =>
-  window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  /** @type {any} */ (window).SpeechRecognition ||
+  /** @type {any} */ (window).webkitSpeechRecognition ||
+  null;
 
 export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled = true }) {
   const [wakeMode, setWakeMode] = useState(false);
@@ -15,7 +17,10 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
   const [interimText, setInterimText] = useState('');
   const [voiceSupported] = useState(() => {
     if (typeof window === 'undefined') return false;
-    return Boolean(getSpeechRecognitionCtor()) && Boolean(window.AudioContext || window.webkitAudioContext);
+    return Boolean(getSpeechRecognitionCtor()) && Boolean(
+      window.AudioContext ||
+      /** @type {any} */ (window).webkitAudioContext
+    );
   });
 
   const recognitionRef = useRef(null);
@@ -66,7 +71,10 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
 
   const ensurePlaybackCtx = () => {
     if (!playbackCtxRef.current) {
-      playbackCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      playbackCtxRef.current = new (
+        window.AudioContext ||
+        /** @type {any} */ (window).webkitAudioContext
+      )();
     }
     if (playbackCtxRef.current.state === 'suspended') {
       playbackCtxRef.current.resume();
@@ -110,15 +118,17 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
 
       if (!utteranceStartedRef.current) {
         const wakeMatch = combinedText.match(WAKE_WORD_PATTERN);
-        if (!wakeMatch) {
-          setInterimText('');
+        if (!wakeMatch && !finalText) {
+          setInterimText(latestInterim);
           return;
         }
 
         utteranceStartedRef.current = true;
         setListening(true);
 
-        const afterWake = combinedText.slice(wakeMatch.index + wakeMatch[0].length).trim();
+        const afterWake = wakeMatch
+          ? combinedText.slice(wakeMatch.index + wakeMatch[0].length).trim()
+          : finalText.trim();
         utteranceBufferRef.current = afterWake;
         setInterimText(afterWake);
 
@@ -287,12 +297,15 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     if (!String(text || '').trim()) return;
 
     try {
-      const res = await invokeFunction('voiceSynthesis', { text });
-      if (res.data?.audio) {
-        await playMp3Base64(res.data.audio);
+      const res = await requestSpeech(String(text).trim());
+      if (res.success && res.audioBase64) {
+        await playMp3Base64(res.audioBase64);
+      } else {
+        throw new Error('The voice service returned no audio.');
       }
     } catch (error) {
-      console.warn('ATHINA TTS failed:', error);
+      console.warn('ATHINA ElevenLabs TTS failed:', error);
+      onAgentResponseRef.current?.('Voice output failed. Check the ElevenLabs backend configuration.');
       if (shouldKeepListeningRef.current) {
         startRecognition();
       }
