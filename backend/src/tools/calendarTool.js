@@ -3,6 +3,8 @@ import { getGoogleClients } from "../utils/googleWorkspace.js";
 
 const DEFAULT_TIME_ZONE = process.env.ATHINA_TIME_ZONE || "Asia/Dubai";
 const EMAIL_PATTERN = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
+const ISO_WITH_EXPLICIT_ZONE_PATTERN = /(z|[+-]\d{2}:\d{2})$/i;
+const LOCAL_ISO_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:[t\s](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/i;
 
 const normalizeAttendees = (attendees) => {
   const values = Array.isArray(attendees)
@@ -54,6 +56,29 @@ const zonedLocalToUtc = ({ year, month, day, hour, minute }, timeZone = DEFAULT_
   const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
   const offsetMinutes = getTimeZoneOffsetMinutes(utcGuess, timeZone);
   return new Date(utcGuess.getTime() - offsetMinutes * 60000);
+};
+
+const parseLocalDateTimeInZone = (value, timeZone) => {
+  const match = String(value || "").trim().match(LOCAL_ISO_PATTERN);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4] || 0);
+  const minute = Number(match[5] || 0);
+  const second = Number(match[6] || 0);
+
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+    return null;
+  }
+
+  const utcDate = zonedLocalToUtc({ year, month, day, hour, minute }, timeZone);
+  if (!isValidDate(utcDate)) return null;
+
+  if (second === 0) return utcDate;
+
+  return new Date(utcDate.getTime() + second * 1000);
 };
 
 const parseClock = (raw) => {
@@ -147,8 +172,18 @@ const resolveDateText = (dateText, timeZone = DEFAULT_TIME_ZONE) => {
 
 const resolveDateTime = ({ value, date, time, timeZone = DEFAULT_TIME_ZONE }) => {
   if (value) {
-    const direct = new Date(value);
-    if (isValidDate(direct)) return direct;
+    const raw = String(value).trim();
+
+    if (ISO_WITH_EXPLICIT_ZONE_PATTERN.test(raw)) {
+      const direct = new Date(raw);
+      if (isValidDate(direct)) return direct;
+    } else {
+      const local = parseLocalDateTimeInZone(raw, timeZone);
+      if (isValidDate(local)) return local;
+
+      const direct = new Date(raw);
+      if (isValidDate(direct)) return direct;
+    }
   }
 
   const dateParts = resolveDateText(date, timeZone);
@@ -159,8 +194,8 @@ const resolveDateTime = ({ value, date, time, timeZone = DEFAULT_TIME_ZONE }) =>
   return isValidDate(resolved) ? resolved : null;
 };
 
-const normalizeWindow = (params) => {
-  const timeZone = String(params.timeZone || DEFAULT_TIME_ZONE);
+const normalizeWindow = (params, effectiveTimeZone = null) => {
+  const timeZone = String(effectiveTimeZone || params.timeZone || DEFAULT_TIME_ZONE);
   const durationMinutes = Math.max(1, Math.min(Number(params.durationMinutes || 60), 24 * 60));
 
   const startDate = resolveDateTime({
@@ -181,6 +216,26 @@ const normalizeWindow = (params) => {
     durationMinutes,
     timeZone,
   };
+};
+
+const detectCalendarTimeZone = async (calendar) => {
+  try {
+    const primary = await calendar.calendars.get({ calendarId: "primary" });
+    const tz = String(primary?.data?.timeZone || "").trim();
+    if (tz) return tz;
+  } catch (error) {
+    console.warn("[CALENDAR] Could not read primary calendar timezone:", error?.message || error);
+  }
+
+  try {
+    const setting = await calendar.settings.get({ setting: "timezone" });
+    const tz = String(setting?.data?.value || "").trim();
+    if (tz) return tz;
+  } catch (error) {
+    console.warn("[CALENDAR] Could not read calendar settings timezone:", error?.message || error);
+  }
+
+  return DEFAULT_TIME_ZONE;
 };
 
 const toIcsDate = (value) =>
@@ -264,7 +319,8 @@ export const execute = async (params = {}) => {
 
   const normalizedAction = String(action || "create_event").trim().toLowerCase();
   const normalizedAttendees = normalizeAttendees(attendees);
-  const window = normalizeWindow(params);
+  let effectiveTimeZone = String(params.timeZone || DEFAULT_TIME_ZONE);
+  let window = normalizeWindow(params, effectiveTimeZone);
 
   if (["create_event", "ensure_slot", "check_availability"].includes(normalizedAction)) {
     if (!window.startAt || !window.endAt) {
@@ -292,6 +348,11 @@ export const execute = async (params = {}) => {
 
   try {
     const { calendar } = await getGoogleClients({ sessionId, userId });
+
+    if (!params.timeZone) {
+      effectiveTimeZone = await detectCalendarTimeZone(calendar);
+      window = normalizeWindow(params, effectiveTimeZone);
+    }
 
     const findTargetEvent = async () => {
       if (eventId) {
@@ -424,10 +485,10 @@ export const execute = async (params = {}) => {
           location: location ?? target.location ?? undefined,
           description: description ?? target.description ?? undefined,
           start: nextStart
-            ? { dateTime: nextStart, timeZone: window.timeZone }
+            ? { dateTime: nextStart, timeZone: effectiveTimeZone }
             : target.start,
           end: nextEnd
-            ? { dateTime: nextEnd, timeZone: window.timeZone }
+            ? { dateTime: nextEnd, timeZone: effectiveTimeZone }
             : target.end,
           attendees:
             normalizedAttendees.length > 0
@@ -479,8 +540,8 @@ export const execute = async (params = {}) => {
         eventId: target.id,
         sendUpdates: "all",
         requestBody: {
-          start: { dateTime: window.startAt, timeZone: window.timeZone },
-          end: { dateTime: window.endAt, timeZone: window.timeZone },
+          start: { dateTime: window.startAt, timeZone: effectiveTimeZone },
+          end: { dateTime: window.endAt, timeZone: effectiveTimeZone },
         },
       });
 
@@ -560,8 +621,8 @@ export const execute = async (params = {}) => {
         summary: String(title).trim(),
         location: location || undefined,
         description: description || undefined,
-        start: { dateTime: window.startAt, timeZone: window.timeZone },
-        end: { dateTime: window.endAt, timeZone: window.timeZone },
+        start: { dateTime: window.startAt, timeZone: effectiveTimeZone },
+        end: { dateTime: window.endAt, timeZone: effectiveTimeZone },
         attendees:
           normalizedAttendees.length > 0
             ? normalizedAttendees.map((email) => ({ email }))
@@ -635,7 +696,7 @@ export const schema = {
       date: { type: "string", description: "Human date such as today, tomorrow, 30 July, or July 30." },
       time: { type: "string", description: "Human start time such as 2 PM, 14:00, or 14:00 PM." },
       durationMinutes: { type: "number", description: "Event duration in minutes. Defaults to 60." },
-      timeZone: { type: "string", description: "IANA timezone. Defaults to Asia/Dubai." },
+      timeZone: { type: "string", description: "IANA timezone. Defaults to your Google Calendar timezone, then Asia/Dubai." },
       timeMin: { type: "string" },
       timeMax: { type: "string" },
       maxResults: { type: "number" },
@@ -649,4 +710,9 @@ export const schema = {
       },
     },
   },
+};
+
+export const __test__ = {
+  parseLocalDateTimeInZone,
+  normalizeWindow,
 };
