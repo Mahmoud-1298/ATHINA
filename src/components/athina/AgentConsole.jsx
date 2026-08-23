@@ -212,19 +212,18 @@ export default function AgentConsole({ onActions, onAvatarState }) {
     onUserTranscript: (text) => {
       setMessages((prev) => [...prev, { role: 'user', content: text }]);
       setLoading(true);
-      // Call the session-aware agent endpoint and reuse inline voice audio when available.
+      // Keep reasoning on the session-aware agent endpoint and stream speech separately.
       voiceActionPromiseRef.current = sendAgentMessage(text, sessionId, 'voice')
         .then((data) => {
           if (onActions && data.actions) onActions(data.actions);
-          if (data.audioBase64) {
-            voice.playAudioBase64(data.audioBase64);
-          } else if (data.reply) {
-            voice.speakText(data.reply);
-          }
+          if (data.reply) voice.streamText(data.reply);
           setMessages((prev) => [...prev, { role: 'assistant', content: data.reply, actions: data.actions || [] }]);
           return data;
         })
-        .catch(() => null)
+        .catch((error) => {
+          setMessages((prev) => [...prev, { role: 'assistant', content: `Voice request failed: ${error?.message || 'unknown error'}` }]);
+          return null;
+        })
         .finally(() => setLoading(false));
 
       return voiceActionPromiseRef.current;

@@ -431,3 +431,26 @@ export const speakText = async (
       data?.audioBase64 || null,
   };
 };
+
+export const streamSpeech = async (
+  text: string,
+  signal?: AbortSignal,
+): Promise<Response> => {
+  const url = `${BACKEND_BASE_URL}/api/speak/stream`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Request-Id": createRequestId(),
+    },
+    body: JSON.stringify({ text }),
+    signal,
+  });
+
+  if (!response.ok) {
+    const data = await parseJsonSafe(response);
+    throw getFetchError(url, response, data);
+  }
+
+  return response;
+};

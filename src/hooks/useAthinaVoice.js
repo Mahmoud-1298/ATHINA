@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { speakText as requestSpeech } from '@/lib/athinaApi';
+import { speakText as requestSpeech, streamSpeech } from '@/lib/athinaApi';
 
 const WAKE_WORD_PATTERN = /\b(hey|hi|hello)?\s*athina\b/i;
 const END_OF_SPEECH_MS = 700;
@@ -30,11 +30,14 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
   const silenceTimerRef = useRef(null);
   const wakeHoldTimerRef = useRef(null);
   const ignoreInputRef = useRef(false);
+  const speakingRef = useRef(false);
 
   const playbackCtxRef = useRef(null);
   const audioQueueRef = useRef([]);
   const isPlayingRef = useRef(false);
   const currentSourceRef = useRef(null);
+  const audioElementRef = useRef(null);
+  const streamControllerRef = useRef(null);
 
   const onUserTranscriptRef = useRef(onUserTranscript);
   const onAgentResponseRef = useRef(onAgentResponse);
@@ -116,6 +119,10 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
       const combinedText = `${utteranceBufferRef.current} ${finalText} ${latestInterim}`.trim();
       if (!combinedText) return;
 
+      if (speakingRef.current && (finalText.trim() || latestInterim.trim())) {
+        stopPlayback();
+      }
+
       if (!utteranceStartedRef.current) {
         const wakeMatch = combinedText.match(WAKE_WORD_PATTERN);
         if (!wakeMatch && !finalText) {
@@ -167,7 +174,7 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
           await Promise.resolve(onUserTranscriptRef.current?.(transcript));
         } finally {
           ignoreInputRef.current = false;
-          if (shouldKeepListeningRef.current && !speaking) {
+          if (shouldKeepListeningRef.current && !speakingRef.current) {
             startRecognition();
           }
         }
@@ -224,6 +231,16 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
   };
 
   const stopPlayback = () => {
+    streamControllerRef.current?.abort();
+    streamControllerRef.current = null;
+
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      audioElementRef.current.removeAttribute('src');
+      audioElementRef.current.load();
+      audioElementRef.current = null;
+    }
+
     if (currentSourceRef.current) {
       try {
         currentSourceRef.current.onended = null;
@@ -236,6 +253,7 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
 
     audioQueueRef.current = [];
     isPlayingRef.current = false;
+    speakingRef.current = false;
     setSpeaking(false);
 
     if (shouldKeepListeningRef.current) {
@@ -260,6 +278,7 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     source.connect(ctx.destination);
     currentSourceRef.current = source;
     isPlayingRef.current = true;
+    speakingRef.current = true;
     setSpeaking(true);
 
     source.onended = () => {
@@ -307,6 +326,97 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
       console.warn('ATHINA ElevenLabs TTS failed:', error);
       onAgentResponseRef.current?.('Voice output failed. Check the ElevenLabs backend configuration.');
       if (shouldKeepListeningRef.current) {
+        startRecognition();
+      }
+    }
+  };
+
+  const streamText = async (text) => {
+    const normalizedText = String(text || '').trim();
+    if (!normalizedText) return;
+
+    stopPlayback();
+    const controller = new AbortController();
+    streamControllerRef.current = controller;
+
+    try {
+      const response = await streamSpeech(normalizedText, controller.signal);
+      if (!response.body || typeof window.MediaSource === 'undefined') {
+        await speakText(normalizedText);
+        return;
+      }
+
+      const mediaSource = new MediaSource();
+      const audio = new Audio();
+      audio.autoplay = true;
+      audio.src = URL.createObjectURL(mediaSource);
+      audioElementRef.current = audio;
+
+      await new Promise((resolve, reject) => {
+        const chunks = [];
+        let sourceBuffer;
+        let ended = false;
+
+        const appendNext = () => {
+          if (!sourceBuffer || sourceBuffer.updating || chunks.length === 0) return;
+          sourceBuffer.appendBuffer(chunks.shift());
+        };
+
+        mediaSource.addEventListener('sourceopen', () => {
+          try {
+            sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+            sourceBuffer.mode = 'sequence';
+            sourceBuffer.addEventListener('updateend', () => {
+              appendNext();
+              if (ended && chunks.length === 0 && !sourceBuffer.updating && mediaSource.readyState === 'open') {
+                mediaSource.endOfStream();
+              }
+            });
+            void audio.play().catch(() => {});
+            speakingRef.current = true;
+            isPlayingRef.current = true;
+            setSpeaking(true);
+            appendNext();
+          } catch (error) {
+            reject(error);
+          }
+        }, { once: true });
+
+        audio.addEventListener('ended', () => {
+          speakingRef.current = false;
+          isPlayingRef.current = false;
+          setSpeaking(false);
+          resolve();
+        }, { once: true });
+
+        audio.addEventListener('error', () => reject(new Error('Streaming audio playback failed.')), { once: true });
+
+        void (async () => {
+          const reader = response.body.getReader();
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+              appendNext();
+            }
+            ended = true;
+            appendNext();
+          } catch (error) {
+            reject(error);
+          }
+        })();
+      });
+    } catch (error) {
+      if (error?.name !== 'AbortError') {
+        console.warn('ATHINA streaming TTS failed:', error);
+        await speakText(normalizedText);
+      }
+    } finally {
+      if (streamControllerRef.current === controller) {
+        streamControllerRef.current = null;
+      }
+      if (shouldKeepListeningRef.current && !speakingRef.current) {
         startRecognition();
       }
     }
@@ -364,5 +474,6 @@ export function useAthinaVoice({ onUserTranscript, onAgentResponse, voiceEnabled
     playAudioBase64: playMp3Base64,
     stopVoice: stopPlayback,
     speakText,
+    streamText,
   };
 }
