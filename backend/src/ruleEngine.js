@@ -19,9 +19,12 @@ const VALID_ACTIONS = {
   calendar: new Set([
     "create_event",
     "list_events",
+    "get_event",
+    "find_event",
     "check_availability",
     "ensure_slot",
     "update_event",
+    "move_event",
     "delete_event",
   ]),
 };

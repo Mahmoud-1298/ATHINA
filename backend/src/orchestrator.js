@@ -44,6 +44,7 @@ const normalizeCacheText = (text) =>
 
 const PENDING_MEETING_CONTEXT_KEY = "pending_meeting_request";
 const LAST_MEETING_METADATA_KEY = "last_meeting_metadata";
+const CONTACT_BOOK_CONTEXT_KEY = "contact_book";
 
 const MONTH_INDEX = {
   january: 0,
@@ -181,6 +182,64 @@ const hasExplicitWriteIntent = (
     String(message || "")
   );
 
+const hasRecentExplicitWriteIntent = (
+  history,
+  message
+) => {
+  if (hasExplicitWriteIntent(message)) {
+    return true;
+  }
+
+  if (!Array.isArray(history)) {
+    return false;
+  }
+
+  return history
+    .slice(-4)
+    .reverse()
+    .some(
+      (entry) =>
+        entry?.role === "user" &&
+        hasExplicitWriteIntent(entry.content)
+    );
+};
+
+const countActionSignals = (message) => {
+  const text = String(message || "").toLowerCase();
+  if (!text) return 0;
+
+  const checks = [
+    /\b(email|mail|inbox|reply|forward)\b/,
+    /\b(meeting|calendar|appointment|event|schedule)\b/,
+    /\b(traffic|eta|route|directions|travel time)\b/,
+    /\b(search|web|website|browse|look up online)\b/,
+    /\b(book|booking|reservation|hotel|flight)\b/,
+  ];
+
+  return checks.reduce(
+    (count, pattern) =>
+      count + (pattern.test(text) ? 1 : 0),
+    0
+  );
+};
+
+export const shouldPreferPlannerForMessage = (
+  message
+) => {
+  const text = String(message || "").trim();
+  if (!text) return false;
+
+  const hasMultiClause =
+    /\b(and|then|also|plus|after that|as well as)\b/i.test(
+      text
+    );
+
+  const signalCount =
+    countActionSignals(text);
+
+  return signalCount >= 2 || (hasMultiClause && signalCount >= 1);
+};
+
 const isWriteTask = (task) => {
   const action = String(
     task?.params?.action || "default"
@@ -215,6 +274,207 @@ const extractEmails = (message) => {
       )
     )
   );
+};
+
+const extractAttendeeHints = (message) => {
+  const text = String(message || "");
+  const matches = [];
+
+  const withPattern =
+    /\bwith\s+([A-Za-z][A-Za-z\s'.-]{1,80})/gi;
+
+  let match;
+  while ((match = withPattern.exec(text))) {
+    const candidate = String(match[1] || "")
+      .split(/\b(today|tomorrow|at|for|from|on|about|and)\b/i)[0]
+      .trim();
+
+    if (!candidate) {
+      continue;
+    }
+
+    const cleaned = candidate
+      .replace(/^the\s+/i, "")
+      .trim();
+
+    if (cleaned && cleaned.length <= 60) {
+      matches.push(cleaned);
+    }
+  }
+
+  return Array.from(new Set(matches));
+};
+
+const normalizeContactName = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const extractNameEmailPairs = (message) => {
+  const text = String(message || "");
+  const pairs = [];
+
+  const bracketPattern =
+    /([A-Za-z][A-Za-z\s'.-]{1,60})\s*<\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\s*>/gi;
+
+  let match;
+  while ((match = bracketPattern.exec(text))) {
+    const rawName = String(match[1] || "").trim();
+    const email = String(match[2] || "")
+      .trim()
+      .toLowerCase();
+
+    if (rawName && email) {
+      pairs.push({
+        name: rawName,
+        normalizedName: normalizeContactName(
+          rawName
+        ),
+        email,
+      });
+    }
+  }
+
+  return pairs;
+};
+
+const mergeContactBook = (
+  existingBook,
+  discoveredPairs
+) => {
+  const map = new Map(
+    Array.isArray(existingBook)
+      ? existingBook
+          .filter(
+            (entry) =>
+              entry &&
+              entry.normalizedName &&
+              entry.email
+          )
+          .map((entry) => [
+            entry.normalizedName,
+            entry,
+          ])
+      : []
+  );
+
+  for (const pair of discoveredPairs) {
+    if (!pair.normalizedName || !pair.email) {
+      continue;
+    }
+
+    map.set(pair.normalizedName, {
+      ...pair,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  return Array.from(map.values());
+};
+
+const resolveContactEmail = (
+  value,
+  contactBook
+) => {
+  const token = String(value || "").trim();
+  if (!token) return null;
+
+  if (/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(token)) {
+    return token.toLowerCase();
+  }
+
+  const normalized =
+    normalizeContactName(token);
+
+  const exact =
+    (Array.isArray(contactBook)
+      ? contactBook
+      : []
+    ).find(
+      (entry) =>
+        entry.normalizedName === normalized
+    );
+
+  if (exact?.email) {
+    return exact.email;
+  }
+
+  const fuzzy =
+    (Array.isArray(contactBook)
+      ? contactBook
+      : []
+    ).find((entry) =>
+      entry.normalizedName.includes(
+        normalized
+      ) ||
+      normalized.includes(
+        entry.normalizedName
+      )
+    );
+
+  return fuzzy?.email || null;
+};
+
+const applyContactResolutionToTasks = (
+  tasks,
+  contactBook
+) => {
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return tasks;
+  }
+
+  return tasks.map((task) => {
+    if (!task || typeof task !== "object") {
+      return task;
+    }
+
+    const params =
+      task.params &&
+      typeof task.params === "object"
+        ? { ...task.params }
+        : {};
+
+    if (task.tool === "email") {
+      const action = String(
+        params.action || "send"
+      ).toLowerCase();
+
+      if (
+        ["send", "reply", "forward"].includes(
+          action
+        ) &&
+        typeof params.to === "string"
+      ) {
+        const resolved = resolveContactEmail(
+          params.to,
+          contactBook
+        );
+        if (resolved) {
+          params.to = resolved;
+        }
+      }
+    }
+
+    if (
+      task.tool === "calendar" &&
+      Array.isArray(params.attendees)
+    ) {
+      params.attendees = params.attendees.map(
+        (attendee) =>
+          resolveContactEmail(
+            attendee,
+            contactBook
+          ) || attendee
+      );
+    }
+
+    return {
+      ...task,
+      params,
+    };
+  });
 };
 
 /* =========================================================
@@ -563,6 +823,12 @@ const mergeMeetingState = (current, update) => ({
       ...(update.attendees || []),
     ])
   ),
+  attendeeHints: Array.from(
+    new Set([
+      ...(current?.attendeeHints || []),
+      ...(update.attendeeHints || []),
+    ])
+  ),
   start: update.start || current?.start || null,
   end: update.end || current?.end || null,
   location:
@@ -642,6 +908,15 @@ const getMissingMeetingFields = (meeting) => {
     missing.push("date_time");
   }
 
+  if (
+    Array.isArray(meeting?.attendeeHints) &&
+    meeting.attendeeHints.length > 0 &&
+    (!Array.isArray(meeting?.attendees) ||
+      meeting.attendees.length === 0)
+  ) {
+    missing.push("attendee_email");
+  }
+
   return missing;
 };
 
@@ -668,6 +943,13 @@ const buildMeetingClarificationReply = (
 
   if (missing.includes("date_time")) {
     return `${prefix}What exact date and time should I schedule it for?`;
+  }
+
+  if (missing.includes("attendee_email")) {
+    const names =
+      meeting?.attendeeHints?.join(", ") ||
+      "the attendee";
+    return `${prefix}Please share ${names}'s email address so I can send the calendar invite.`;
   }
 
   return `${prefix}Please confirm the remaining meeting details.`;
@@ -787,6 +1069,8 @@ const interpretMeetingMessage = ({
       allowTitleOnly
     ),
     attendees: extractEmails(message),
+    attendeeHints:
+      extractAttendeeHints(message),
     start: timeWindow.start,
     end: timeWindow.end,
     explicitCreate:
@@ -966,6 +1250,28 @@ const handlePendingMeetingWorkflow = async ({
   });
 
   if (!meeting) return null;
+
+  const contactBook = await getContext(
+    sessionId,
+    CONTACT_BOOK_CONTEXT_KEY,
+    userId
+  );
+
+  const resolvedAttendees = [
+    ...(meeting.attendees || []),
+    ...((meeting.attendeeHints || [])
+      .map((hint) =>
+        resolveContactEmail(
+          hint,
+          contactBook
+        )
+      )
+      .filter(Boolean)),
+  ];
+
+  meeting.attendees = Array.from(
+    new Set(resolvedAttendees)
+  );
 
   const missing = getMissingMeetingFields(meeting);
 
@@ -1505,6 +1811,10 @@ const mapToActions = (executed) => {
     if (task.result.type === "locate") {
       actions.push(task.result);
     } else if (
+      task.result.type === "traffic"
+    ) {
+      actions.push(task.result);
+    } else if (
       task.result.type === "web_search"
     ) {
       actions.push({
@@ -1554,6 +1864,36 @@ export const orchestrate = async ({
       sessionId,
       timestamp: timestamp(),
     };
+  }
+
+  const preferPlanner =
+    shouldPreferPlannerForMessage(
+      normalizedMessage
+    );
+
+  const discoveredContacts =
+    extractNameEmailPairs(
+      normalizedMessage
+    );
+
+  if (discoveredContacts.length > 0) {
+    const existingBook = await getContext(
+      sessionId,
+      CONTACT_BOOK_CONTEXT_KEY,
+      userId
+    );
+
+    const mergedBook = mergeContactBook(
+      existingBook,
+      discoveredContacts
+    );
+
+    await saveContext(
+      sessionId,
+      CONTACT_BOOK_CONTEXT_KEY,
+      mergedBook,
+      userId
+    );
   }
 
   /* ---------------------------------------------------------
@@ -1676,39 +2016,54 @@ export const orchestrate = async ({
       "[ATHINA][ROUTING] Mixed meeting+email intent detected. Bypassing direct meeting workflow and deferring to planner decomposition."
     );
   } else {
-    const pendingMeetingResult =
-      await handlePendingMeetingWorkflow({
-        message: normalizedMessage,
-        sessionId,
-        userId,
-      });
+    const hasPendingMeeting =
+      Boolean(
+        await getContext(
+          sessionId,
+          PENDING_MEETING_CONTEXT_KEY,
+          userId
+        )
+      );
 
-    if (pendingMeetingResult) {
+    if (preferPlanner && !hasPendingMeeting) {
       console.log(
-        "[ATHINA][ROUTING] Meeting workflow handled the request."
+        "[ATHINA][ROUTING] Complex multi-intent request detected. Skipping direct meeting shortcut and delegating to planner."
       );
+    } else {
+      const pendingMeetingResult =
+        await handlePendingMeetingWorkflow({
+          message: normalizedMessage,
+          sessionId,
+          userId,
+        });
 
-      await saveTurn(
-        sessionId,
-        normalizedMessage,
-        pendingMeetingResult.reply,
-        userId
-      );
+      if (pendingMeetingResult) {
+        console.log(
+          "[ATHINA][ROUTING] Meeting workflow handled the request."
+        );
 
-      return {
-        success: Boolean(
-          pendingMeetingResult.success
-        ),
-        reply: pendingMeetingResult.reply,
-        actions:
-          pendingMeetingResult.actions || [],
-        sessionId,
-        timestamp: timestamp(),
-        directAction: true,
-        workflowCleared: Boolean(
-          pendingMeetingResult.workflowCleared
-        ),
-      };
+        await saveTurn(
+          sessionId,
+          normalizedMessage,
+          pendingMeetingResult.reply,
+          userId
+        );
+
+        return {
+          success: Boolean(
+            pendingMeetingResult.success
+          ),
+          reply: pendingMeetingResult.reply,
+          actions:
+            pendingMeetingResult.actions || [],
+          sessionId,
+          timestamp: timestamp(),
+          directAction: true,
+          workflowCleared: Boolean(
+            pendingMeetingResult.workflowCleared
+          ),
+        };
+      }
     }
   }
 
@@ -1753,9 +2108,11 @@ export const orchestrate = async ({
      5. QUICK REPLIES
      --------------------------------------------------------- */
 
-  const quickReply = getQuickReply(
-    normalizedMessage
-  );
+  const quickReply = preferPlanner
+    ? null
+    : getQuickReply(
+        normalizedMessage
+      );
 
   const locationNote =
     await buildLocationContext(
@@ -1805,11 +2162,13 @@ export const orchestrate = async ({
      --------------------------------------------------------- */
 
   const productivityIntentResult =
-    await handleProductivityIntents({
-      message: normalizedMessage,
-      sessionId,
-      userId,
-    });
+    preferPlanner
+      ? null
+      : await handleProductivityIntents({
+          message: normalizedMessage,
+          sessionId,
+          userId,
+        });
 
   if (productivityIntentResult) {
     console.log(
@@ -1987,7 +2346,16 @@ export const orchestrate = async ({
      10. TASK VALIDATION
      --------------------------------------------------------- */
 
-  const tasks = planResult.tasks || [];
+  const contactBook = await getContext(
+    sessionId,
+    CONTACT_BOOK_CONTEXT_KEY,
+    userId
+  );
+
+  const tasks = applyContactResolutionToTasks(
+    planResult.tasks || [],
+    contactBook
+  );
 
   const taskValidation =
     validateTasks(tasks);
@@ -2031,6 +2399,10 @@ export const orchestrate = async ({
       normalizedMessage
     ) &&
     !hasExplicitWriteConfirmation(
+      normalizedMessage
+    ) &&
+    !hasRecentExplicitWriteIntent(
+      history,
       normalizedMessage
     )
   ) {

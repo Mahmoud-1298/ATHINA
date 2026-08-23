@@ -4,6 +4,7 @@ import * as llmTool from "./llmTool.js";
 import * as emailTool from "./emailTool.js";
 import * as calendarTool from "./calendarTool.js";
 import * as bookingTool from "./bookingTool.js";
+import * as trafficTool from "./trafficTool.js";
 
 /* =========================================================
    TOOL REGISTRY
@@ -16,6 +17,7 @@ export const toolRegistry = Object.freeze({
   email: emailTool,
   calendar: calendarTool,
   booking: bookingTool,
+  traffic: trafficTool,
 });
 
 /* =========================================================
@@ -52,6 +54,20 @@ const TOOL_ACTION_POLICIES = Object.freeze({
 
   maps: {
     default: {
+      risk: "read",
+      requiresApproval: false,
+      retryable: true,
+    },
+  },
+
+  traffic: {
+    default: {
+      risk: "read",
+      requiresApproval: false,
+      retryable: true,
+    },
+
+    route: {
       risk: "read",
       requiresApproval: false,
       retryable: true,

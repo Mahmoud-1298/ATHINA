@@ -87,6 +87,19 @@ const normalizeRecipient = (to) => {
   return String(to || "").trim();
 };
 
+const EMAIL_PATTERN = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
+
+const splitRecipients = (to) =>
+  String(to || "")
+    .split(/[;,]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+const hasOnlyValidEmails = (to) => {
+  const recipients = splitRecipients(to);
+  return recipients.length > 0 && recipients.every((value) => EMAIL_PATTERN.test(value));
+};
+
 export const execute = async (params = {}) => {
   const {
     action = "send",
@@ -183,6 +196,20 @@ export const execute = async (params = {}) => {
         success: false,
         action: normalizedAction,
         error: "Missing required parameters: to and subject.",
+        missingFields: [
+          ...(!recipient ? ["to"] : []),
+          ...(!String(subject || "").trim() ? ["subject"] : []),
+        ],
+      };
+    }
+
+    if (!hasOnlyValidEmails(recipient)) {
+      return {
+        type: "email",
+        success: false,
+        action: normalizedAction,
+        error: "Recipient must be a valid email address. I still need the recipient email.",
+        missingFields: ["recipient_email"],
       };
     }
 
@@ -230,7 +257,26 @@ export const execute = async (params = {}) => {
 
   const recipient = normalizeRecipient(to);
   if (!recipient || !String(subject || "").trim()) {
-    return { type: "email", success: false, action: "send", error: "Missing required parameters: to and subject." };
+    return {
+      type: "email",
+      success: false,
+      action: "send",
+      error: "Missing required parameters: to and subject.",
+      missingFields: [
+        ...(!recipient ? ["to"] : []),
+        ...(!String(subject || "").trim() ? ["subject"] : []),
+      ],
+    };
+  }
+
+  if (!hasOnlyValidEmails(recipient)) {
+    return {
+      type: "email",
+      success: false,
+      action: "send",
+      error: "Recipient must be a valid email address. I still need the recipient email.",
+      missingFields: ["recipient_email"],
+    };
   }
 
   const transport = getTransporter();

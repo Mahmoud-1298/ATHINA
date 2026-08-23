@@ -5,7 +5,7 @@ import { getToolSchemas } from "./tools/index.js";
    CONFIGURATION
    ========================================================= */
 
-const MAX_TASKS = 5;
+const MAX_TASKS = 8;
 
 const ATHINA_PERSONALITY = `
 You are ATHINA, an agentic executive assistant.
@@ -41,7 +41,10 @@ const ACTION_PATTERNS = {
     /\b(check|show|list|read|find|do i have|am i free|available|availability|today|tomorrow|next)\b[\s\S]*\b(calendar|agenda|meeting|meetings|event|events|appointment|appointments|schedule)\b/i,
 
   maps:
-    /\b(show|find|locate|pin|point to|navigate to)\b[\s\S]*\b(location|place|address|map)\b|\b(directions to|near me|on the map)\b/i,
+    /\b(show|find|locate|pin|point to)\b[\s\S]*\b(location|place|address|map)\b|\b(near me|on the map)\b/i,
+
+  traffic:
+    /\b(traffic|eta|travel time|how long.*drive|route from|directions from|best route)\b/i,
 
   web:
     /\b(search the web|search online|look up online|browse|open the website|open website|open the site|open site|open the page|open page|open the url|visit|go to website|youtube|www\.)\b/i,
@@ -205,8 +208,9 @@ const buildPlannerPrompt = (serializedToolSchemas) =>
     "- Include attendee email addresses only when the request explicitly relates to a meeting, calendar invitation, appointment, or event.",
     "- Never use the calendar tool for a normal email request.",
     "",
-    "MAP AND BROWSER RULES",
-    "- Use the maps tool for physical locations, directions, coordinates, and map pins.",
+    "MAP, TRAFFIC, AND BROWSER RULES",
+    "- Use the maps tool for physical locations, coordinates, and map pins.",
+    "- Use the traffic tool for route distance, ETA, and traffic-aware driving checks between origin and destination.",
     "- Use the web or browser tool only when the user explicitly requests current web information or asks to open or visit a website.",
     "- Opening a new browser tab must use the exact supported browser/web tool action from the schema.",
     "- Do not claim a tab was opened unless a supported tool task is planned and later succeeds.",
@@ -425,6 +429,15 @@ const validateIntentToolConsistency = ({
     );
   }
 
+  if (
+    deterministicIntent.intent === "traffic" &&
+    !tools.has("traffic")
+  ) {
+    violations.push(
+      "The user requested route or traffic information, but the plan does not use the traffic tool."
+    );
+  }
+
   return {
     valid: violations.length === 0,
     violations,
@@ -558,36 +571,87 @@ export const plan = async ({
 
   let result;
 
-  try {
-    result = await callLLM({
-      messages,
+  const callPlanner = async (
+    extraGuidance = ""
+  ) => {
+    const requestMessages =
+      extraGuidance
+        ? [
+            ...messages,
+            {
+              role: "user",
+              content: extraGuidance,
+            },
+          ]
+        : messages;
+
+    return callLLM({
+      messages: requestMessages,
       temperature: 0.1,
-      maxTokens: 1200,
+      maxTokens: 1400,
       jsonMode: true,
     });
+  };
+
+  try {
+    result = await callPlanner();
   } catch (error) {
-    console.error(
-      "[ATHINA][PLANNER] LLM planning failed:",
-      error
+    console.warn(
+      "[ATHINA][PLANNER] First planning attempt failed, retrying with stricter formatting guidance.",
+      error?.message || error
     );
 
-    if (deterministicIntent.actionable) {
-      return buildPlanningFailure(
-        normalizedMessage,
-        "planner_llm_error",
-        [error.message]
+    try {
+      result = await callPlanner(
+        "FORMAT RETRY: Return exactly one valid JSON object with keys requiresPlanning, goal, reply, and tasks. No markdown or extra text."
       );
-    }
+    } catch (retryError) {
+      console.error(
+        "[ATHINA][PLANNER] LLM planning failed:",
+        retryError
+      );
 
-    return {
-      requiresPlanning: false,
-      reply:
-        "I’m having trouble processing that right now. Could you try again?",
-      goal: normalizedMessage,
-      steps: [],
-      tasks: [],
-      planningFailed: true,
-    };
+      if (deterministicIntent.actionable) {
+        return buildPlanningFailure(
+          normalizedMessage,
+          "planner_llm_error",
+          [
+            error?.message ||
+              "first attempt failed",
+            retryError?.message ||
+              "retry attempt failed",
+          ]
+        );
+      }
+
+      return {
+        requiresPlanning: false,
+        reply:
+          "I’m having trouble processing that right now. Could you try again?",
+        goal: normalizedMessage,
+        steps: [],
+        tasks: [],
+        planningFailed: true,
+      };
+    }
+  }
+
+  if (
+    !result ||
+    typeof result !== "object" ||
+    Array.isArray(result)
+  ) {
+    console.warn(
+      "[ATHINA][PLANNER] Invalid planner response shape. Retrying once."
+    );
+
+    try {
+      result = await callPlanner(
+        "REPAIR RETRY: Your prior output was invalid. Return exactly one JSON object with keys requiresPlanning, goal, reply, tasks."
+      );
+    } catch {
+      // Keep existing result and fail below.
+    }
   }
 
   if (

@@ -258,6 +258,8 @@ export const execute = async (params = {}) => {
     timeMin,
     timeMax,
     maxResults = 10,
+    eventId,
+    query,
   } = params;
 
   const normalizedAction = String(action || "create_event").trim().toLowerCase();
@@ -290,6 +292,31 @@ export const execute = async (params = {}) => {
 
   try {
     const { calendar } = await getGoogleClients({ sessionId, userId });
+
+    const findTargetEvent = async () => {
+      if (eventId) {
+        const eventRes = await calendar.events.get({
+          calendarId: "primary",
+          eventId: String(eventId),
+        });
+
+        return eventRes.data || null;
+      }
+
+      const searchQuery = String(query || title || "").trim();
+      if (!searchQuery) return null;
+
+      const list = await calendar.events.list({
+        calendarId: "primary",
+        q: searchQuery,
+        timeMin: new Date().toISOString(),
+        maxResults: 10,
+        singleEvents: true,
+        orderBy: "startTime",
+      });
+
+      return (list.data.items || [])[0] || null;
+    };
 
     if (["list_events", "list"].includes(normalizedAction)) {
       const list = await calendar.events.list({
@@ -331,6 +358,172 @@ export const execute = async (params = {}) => {
         end: window.endAt,
         isFree: conflicts.length === 0,
         conflicts,
+      };
+    }
+
+    if (["get_event", "find_event"].includes(normalizedAction)) {
+      const found = await findTargetEvent();
+
+      if (!found) {
+        return {
+          type: "calendar",
+          success: false,
+          action: normalizedAction,
+          error: "I could not find a matching calendar event.",
+          missingFields: eventId
+            ? ["valid_event_id"]
+            : ["eventId_or_query"],
+        };
+      }
+
+      return {
+        type: "calendar",
+        success: true,
+        action: "get_event",
+        event: {
+          id: found.id,
+          title: found.summary || "Untitled event",
+          start: found.start?.dateTime || found.start?.date || null,
+          end: found.end?.dateTime || found.end?.date || null,
+          location: found.location || "",
+          description: found.description || "",
+          htmlLink: found.htmlLink || null,
+        },
+      };
+    }
+
+    if (normalizedAction === "update_event") {
+      const target = await findTargetEvent();
+      if (!target?.id) {
+        return {
+          type: "calendar",
+          success: false,
+          action: normalizedAction,
+          error: "I could not find the event to update.",
+          missingFields: eventId
+            ? ["valid_event_id"]
+            : ["eventId_or_query"],
+        };
+      }
+
+      const hasTimeUpdate = Boolean(params.start || params.end || params.datetime || params.date || params.time);
+      const nextStart = hasTimeUpdate
+        ? window.startAt || target.start?.dateTime || target.start?.date || null
+        : target.start?.dateTime || target.start?.date || null;
+
+      const nextEnd = hasTimeUpdate
+        ? window.endAt || target.end?.dateTime || target.end?.date || null
+        : target.end?.dateTime || target.end?.date || null;
+
+      const updated = await calendar.events.patch({
+        calendarId: "primary",
+        eventId: target.id,
+        sendUpdates: normalizedAttendees.length > 0 ? "all" : undefined,
+        requestBody: {
+          summary: String(title || target.summary || "Untitled event").trim(),
+          location: location ?? target.location ?? undefined,
+          description: description ?? target.description ?? undefined,
+          start: nextStart
+            ? { dateTime: nextStart, timeZone: window.timeZone }
+            : target.start,
+          end: nextEnd
+            ? { dateTime: nextEnd, timeZone: window.timeZone }
+            : target.end,
+          attendees:
+            normalizedAttendees.length > 0
+              ? normalizedAttendees.map((email) => ({ email }))
+              : target.attendees,
+        },
+      });
+
+      return {
+        type: "calendar",
+        success: true,
+        action: "update_event",
+        eventId: updated.data.id,
+        title: updated.data.summary || String(title || target.summary || "Untitled event").trim(),
+        start: updated.data.start?.dateTime || updated.data.start?.date || nextStart,
+        end: updated.data.end?.dateTime || updated.data.end?.date || nextEnd,
+        htmlLink: updated.data.htmlLink || null,
+        verified: true,
+      };
+    }
+
+    if (normalizedAction === "move_event") {
+      const target = await findTargetEvent();
+      if (!target?.id) {
+        return {
+          type: "calendar",
+          success: false,
+          action: normalizedAction,
+          error: "I could not find the event to reschedule.",
+          missingFields: eventId
+            ? ["valid_event_id"]
+            : ["eventId_or_query"],
+        };
+      }
+
+      if (!window.startAt || !window.endAt) {
+        return {
+          type: "calendar",
+          success: false,
+          action: normalizedAction,
+          code: "MISSING_DATE_TIME",
+          error: "I still need the new date and time to move this event.",
+          missingFields: ["date", "time"],
+        };
+      }
+
+      const moved = await calendar.events.patch({
+        calendarId: "primary",
+        eventId: target.id,
+        sendUpdates: "all",
+        requestBody: {
+          start: { dateTime: window.startAt, timeZone: window.timeZone },
+          end: { dateTime: window.endAt, timeZone: window.timeZone },
+        },
+      });
+
+      return {
+        type: "calendar",
+        success: true,
+        action: "move_event",
+        eventId: moved.data.id,
+        title: moved.data.summary || target.summary || "Untitled event",
+        start: moved.data.start?.dateTime || moved.data.start?.date || window.startAt,
+        end: moved.data.end?.dateTime || moved.data.end?.date || window.endAt,
+        htmlLink: moved.data.htmlLink || null,
+        verified: true,
+      };
+    }
+
+    if (normalizedAction === "delete_event") {
+      const target = await findTargetEvent();
+      if (!target?.id) {
+        return {
+          type: "calendar",
+          success: false,
+          action: normalizedAction,
+          error: "I could not find the event to delete.",
+          missingFields: eventId
+            ? ["valid_event_id"]
+            : ["eventId_or_query"],
+        };
+      }
+
+      await calendar.events.delete({
+        calendarId: "primary",
+        eventId: target.id,
+        sendUpdates: "all",
+      });
+
+      return {
+        type: "calendar",
+        success: true,
+        action: "delete_event",
+        eventId: target.id,
+        title: target.summary || "Untitled event",
+        verified: true,
       };
     }
 
@@ -425,15 +618,17 @@ export const execute = async (params = {}) => {
 
 export const schema = {
   description: "Read and manage calendar events through Google Calendar, with an ICS preparation fallback.",
-  actions: ["create_event", "list_events", "check_availability", "ensure_slot", "create_event", "list_events", "get_event", "find_event", "check_availability", "ensure_slot", "update_event", "move_event", "delete_event"],
+  actions: ["create_event", "list_events", "get_event", "find_event", "check_availability", "ensure_slot", "update_event", "move_event", "delete_event"],
   parameters: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["create_event", "list_events", "check_availability", "ensure_slot", "create_event", "list_events", "get_event", "find_event", "check_availability", "ensure_slot", "update_event", "move_event", "delete_event"],
+        enum: ["create_event", "list_events", "get_event", "find_event", "check_availability", "ensure_slot", "update_event", "move_event", "delete_event"],
       },
       title: { type: "string" },
+      eventId: { type: "string", description: "Calendar event ID used for get/update/move/delete." },
+      query: { type: "string", description: "Event search query used for find/get/update/move/delete when eventId is not provided." },
       datetime: { type: "string", description: "ISO start date-time." },
       start: { type: "string", description: "ISO start date-time." },
       end: { type: "string", description: "ISO end date-time." },
