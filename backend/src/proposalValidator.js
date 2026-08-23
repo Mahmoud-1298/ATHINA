@@ -3,6 +3,7 @@ import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
 import { callLLM } from "./utils/llmClient.js";
 import { cleanText, safeJsonParse } from "./utils/helpers.js";
+import { getEmbedding, embeddingsEnabled } from "./utils/embeddingClient.js";
 import {
   getSupabaseClient,
   saveValidationReport,
@@ -17,9 +18,21 @@ const VALIDATOR_UPLOAD_PREFIX = (
   process.env.SUPABASE_VALIDATOR_UPLOAD_PREFIX || "uploads"
 ).replace(/^\/+|\/+$/g, "");
 
+// Must be a chat/completions-capable model. Embedding-only models
+// (e.g. nvidia/llama-nemotron-embed-vl-1b-v2:free) always fail here
+// with OpenRouter 400 "is an embedding model" and immediately fall
+// back to PRIMARY_MODEL/SECONDARY_MODEL.
 const VALIDATOR_PRIMARY_MODEL =
   process.env.VALIDATOR_PRIMARY_MODEL ||
+  "nvidia/llama-3.1-nemotron-70b-instruct:free";
+
+// Used only for semantic relevance matching (embeddings endpoint), not scoring.
+const VALIDATOR_EMBEDDING_MODEL =
+  process.env.VALIDATOR_EMBEDDING_MODEL ||
   "nvidia/llama-nemotron-embed-vl-1b-v2:free";
+const VALIDATOR_SEMANTIC_RESCUE_THRESHOLD = Number(
+  process.env.VALIDATOR_SEMANTIC_RESCUE_THRESHOLD || 0.62
+);
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_REFERENCE_CHARS_PER_CATEGORY = Number(
@@ -257,7 +270,48 @@ const extractProposalIdentity = (fileName, proposalText) => {
   };
 };
 
-export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles = []) => {
+const cosineSimilarity = (vectorA, vectorB) => {
+  if (!Array.isArray(vectorA) || !Array.isArray(vectorB)) return null;
+  const length = Math.min(vectorA.length, vectorB.length);
+  if (!length) return null;
+
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let index = 0; index < length; index += 1) {
+    dot += vectorA[index] * vectorB[index];
+    magA += vectorA[index] * vectorA[index];
+    magB += vectorB[index] * vectorB[index];
+  }
+
+  if (!magA || !magB) return null;
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+};
+
+// Supplementary recall signal only: never used to reject a proposal that
+// lexical overlap already accepted, only to rescue genuine matches that
+// keyword/term overlap heuristics can miss (paraphrasing, synonyms, etc.).
+const computeSemanticRescueScore = async (proposalContextText, referenceIdentityText) => {
+  if (!embeddingsEnabled()) return null;
+  if (!proposalContextText?.trim() || !referenceIdentityText?.trim()) return null;
+
+  try {
+    const [proposalVector, referenceVector] = await Promise.all([
+      getEmbedding(proposalContextText, VALIDATOR_EMBEDDING_MODEL),
+      getEmbedding(referenceIdentityText, VALIDATOR_EMBEDDING_MODEL),
+    ]);
+
+    return cosineSimilarity(proposalVector, referenceVector);
+  } catch (error) {
+    console.warn(
+      "[VALIDATOR] Semantic relevance rescue skipped:",
+      error?.message || error
+    );
+    return null;
+  }
+};
+
+export const evaluateProposalRelevance = async (fileName, proposalText, referenceFiles = []) => {
   const identity = extractProposalIdentity(fileName, proposalText);
   const requirementOrCostingRef = /requirement|requirements|scope|sow|brief|context|cost|costing|pricing|price|commercial|quotation|quote|boq|bill/i;
   const gateReferenceFiles = (referenceFiles || []).filter((file) =>
@@ -368,7 +422,7 @@ export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles
     costingContextOverlap < 0.06 &&
     costingNumericOverlap < 0.15;
 
-  const isRelevant =
+  const lexicalRelevant =
     hasMeaningfulName &&
     hasMeaningfulContext &&
     !hardMismatch &&
@@ -376,6 +430,25 @@ export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles
     requirementGatePassed &&
     costingGatePassed &&
     identityGatePassed;
+
+  let semanticScore = null;
+  let semanticRescued = false;
+
+  if (!lexicalRelevant && hasMeaningfulName && hasMeaningfulContext) {
+    semanticScore = await computeSemanticRescueScore(
+      identity.contextPreview,
+      referenceIdentityText
+    );
+
+    if (
+      typeof semanticScore === "number" &&
+      semanticScore >= VALIDATOR_SEMANTIC_RESCUE_THRESHOLD
+    ) {
+      semanticRescued = true;
+    }
+  }
+
+  const isRelevant = lexicalRelevant || semanticRescued;
 
   const mismatchReason =
     "The proposal does not match the supplied requirement and costing references.";
@@ -391,6 +464,8 @@ export const evaluateProposalRelevance = (fileName, proposalText, referenceFiles
     nameAnchorHits,
     contextAnchorHits,
     anchorHits,
+    semanticScore,
+    semanticRescued,
     reason: isRelevant
       ? null
       : mismatchReason,
@@ -1387,7 +1462,7 @@ export const validateProposalUpload = async ({
 
   const diagnostics = buildProposalDiagnostics(proposalText);
   const commercialChecks = extractCommercialChecks(proposalText);
-  const relevanceGate = evaluateProposalRelevance(fileName, proposalText, referenceFiles);
+  const relevanceGate = await evaluateProposalRelevance(fileName, proposalText, referenceFiles);
 
   if (!relevanceGate.isRelevant) {
     const unrelatedCategoryContent = {

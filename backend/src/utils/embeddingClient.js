@@ -24,7 +24,7 @@ const getEmbeddingProvider = () => {
 
 export const embeddingsEnabled = () => Boolean(getEmbeddingProvider());
 
-export const getEmbedding = async (text) => {
+export const getEmbedding = async (text, modelOverride = null) => {
   const provider = getEmbeddingProvider();
   if (!provider) return null;
 
@@ -45,7 +45,7 @@ export const getEmbedding = async (text) => {
     },
     body: JSON.stringify({
       input,
-      model: EMBEDDING_MODEL,
+      model: modelOverride || EMBEDDING_MODEL,
     }),
   });
 

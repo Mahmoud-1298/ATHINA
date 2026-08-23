@@ -75,6 +75,10 @@ const setCachedResponse = (key, value) => {
 const sleep = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+// Embedding-only models can never serve chat/completions requests.
+const isEmbeddingOnlyModel = (model) =>
+  /embed/i.test(String(model || ""));
+
 const fetchWithTimeout = async (
   url,
   options,
@@ -540,6 +544,16 @@ export const callLLM = async ({
   const failures = [];
 
   for (const candidate of openRouterModels) {
+    if (isEmbeddingOnlyModel(candidate)) {
+      failures.push(
+        `openrouter/${candidate}: embedding-only model, skipped chat/completions call`,
+      );
+      console.warn(
+        `[LLM] Model "${candidate}" is embedding-only. Skipping chat/completions attempt.`,
+      );
+      continue;
+    }
+
     try {
       return await callCachedModel({
         provider: "openrouter",
