@@ -17,6 +17,10 @@ const VALIDATOR_UPLOAD_PREFIX = (
   process.env.SUPABASE_VALIDATOR_UPLOAD_PREFIX || "uploads"
 ).replace(/^\/+|\/+$/g, "");
 
+const VALIDATOR_PRIMARY_MODEL =
+  process.env.VALIDATOR_PRIMARY_MODEL ||
+  "nvidia/llama-nemotron-embed-vl-1b-v2:free";
+
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_REFERENCE_CHARS_PER_CATEGORY = Number(
   process.env.VALIDATOR_MAX_REFERENCE_CHARS_PER_CATEGORY || 14000
@@ -914,6 +918,7 @@ const validateCategoryPacket = async (packet) => {
           ].join("\n");
 
     const response = await callLLM({
+      model: VALIDATOR_PRIMARY_MODEL,
       messages: [
         { role: "system", content: categorySystemPrompt(packet) },
         {
@@ -1321,6 +1326,7 @@ export const getProposalValidatorDebug = async () => {
   return {
     success: true,
     bucket: VALIDATOR_BUCKET,
+    primaryModel: VALIDATOR_PRIMARY_MODEL,
     referencePrefix: prefix,
     supabaseUrlHost: (() => {
       try {

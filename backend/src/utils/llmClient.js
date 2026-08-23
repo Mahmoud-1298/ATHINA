@@ -525,9 +525,16 @@ export const callLLM = async ({
 }) => {
   const requestedPrimary = model || PRIMARY_MODEL;
 
-  // Exactly two OpenRouter attempts, followed by direct Gemini.
+  // Try requested model first, then configured primary/secondary fallbacks,
+  // followed by direct Gemini as the final provider fallback.
   const openRouterModels = Array.from(
-    new Set([requestedPrimary, SECONDARY_MODEL]),
+    new Set([
+      requestedPrimary,
+      PRIMARY_MODEL,
+      SECONDARY_MODEL,
+    ]
+      .map((candidate) => String(candidate || "").trim())
+      .filter(Boolean)),
   );
 
   const failures = [];
