@@ -155,9 +155,19 @@ export default function AgentConsole({ onActions, onAvatarState, showHeader = tr
 
   const sendMessage = async (text) => {
     if (!text || typeof text !== 'string' || !text.trim() || loading) return;
-    // Handle URL open requests entirely client-side (the agent can't open browser tabs)
-    const urlMatch = text.match(/(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+\.[a-z]{2,}(?:\/[^\s]*)?)/i);
-    if (urlMatch && /\b(open|browse|visit|go to)\b/i.test(text)) {
+
+    // Handle URL open requests entirely client-side (the agent can't open browser tabs).
+    // Deliberately strict: an email address or a keyword buried deep in a
+    // long request (e.g. "places to visit") must never hijack unrelated
+    // commands like sending an email.
+    const trimmedText = text.trim();
+    const hasEmailAddress = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(trimmedText);
+    const openIntentLeading = /^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?(open|browse|visit|go to)\b/i.test(trimmedText);
+    const urlMatch = !hasEmailAddress && openIntentLeading
+      ? trimmedText.match(/\b(?:https?:\/\/)?(?:www\.)?[a-z0-9-]+\.(?:com|net|org|io|ai|co|ae|gov|edu|info|biz|app|dev|me|xyz)(?:\/[^\s]*)?\b/i)
+      : null;
+
+    if (urlMatch) {
       const url = urlMatch[0].startsWith('http') ? urlMatch[0] : 'https://' + urlMatch[0];
       window.open(url, '_blank', 'noopener,noreferrer');
       const userMsg = { role: 'user', content: text };

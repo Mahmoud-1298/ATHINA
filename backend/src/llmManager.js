@@ -69,13 +69,23 @@ const buildDeterministicExecutionReply = (executed = []) => {
     return `I need a few more details before I can continue: ${fields}.`;
   }
 
-  const successfulEmailRead = executed.find(
-    (task) =>
-      task?.result?.success === true &&
-      task?.result?.type === "email" &&
-      String(task?.result?.action || "").toLowerCase() === "read" &&
-      task?.result?.message
+  // Only short-circuit to the canned sender/subject reply when the email
+  // read was the final step of the plan (a literal "check my last email"
+  // request). If a downstream task (e.g. an llm extraction step) ran
+  // afterwards, its output must drive the reply instead.
+  const lastTask = executed[executed.length - 1];
+  const hasDownstreamProcessing = executed.some(
+    (task) => task?.result?.type === "llm" && task?.result?.success === true
   );
+
+  const successfulEmailRead =
+    !hasDownstreamProcessing &&
+    lastTask?.result?.success === true &&
+    lastTask?.result?.type === "email" &&
+    String(lastTask?.result?.action || "").toLowerCase() === "read" &&
+    lastTask?.result?.message
+      ? lastTask
+      : null;
 
   if (successfulEmailRead) {
     const message = successfulEmailRead.result.message || {};
@@ -84,12 +94,13 @@ const buildDeterministicExecutionReply = (executed = []) => {
     return `Your latest email is from ${from}. Subject: ${subject}.`;
   }
 
-  const successfulEmailList = executed.find(
-    (task) =>
-      task?.result?.success === true &&
-      task?.result?.type === "email" &&
-      String(task?.result?.action || "").toLowerCase() === "list"
-  );
+  const successfulEmailList =
+    !hasDownstreamProcessing &&
+    lastTask?.result?.success === true &&
+    lastTask?.result?.type === "email" &&
+    String(lastTask?.result?.action || "").toLowerCase() === "list"
+      ? lastTask
+      : null;
 
   if (successfulEmailList) {
     const count = Number(successfulEmailList.result.count || 0);
