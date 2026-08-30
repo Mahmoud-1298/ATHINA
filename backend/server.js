@@ -194,7 +194,7 @@ const toPreviewHtml = (targetUrl, rawHtml) => {
 };
 
 const getElevenLabsConfig = () => {
-  const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
+  const elevenLabsKey = String(process.env.ELEVENLABS_API_KEY || "").trim();
   const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || "lxYfHSkYm1EzQzGhdbfc";
   const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5";
   const elevenLabsLatencyMode = Number(process.env.ELEVENLABS_LATENCY_MODE || 3);
@@ -207,12 +207,26 @@ const getElevenLabsConfig = () => {
   };
 };
 
+const validateElevenLabsKey = (key) => {
+  if (!key) {
+    throw new Error("ELEVENLABS_API_KEY is not configured.");
+  }
+
+  if (!key.startsWith("sk_")) {
+    throw new Error(
+      "ELEVENLABS_API_KEY is invalid: use the secret ElevenLabs API key beginning with sk_, not the API key ID."
+    );
+  }
+};
+
 const requestElevenLabsSpeech = async (text, modelId) => {
   const {
     elevenLabsKey,
     elevenLabsVoiceId,
     elevenLabsLatencyMode,
   } = getElevenLabsConfig();
+
+  validateElevenLabsKey(elevenLabsKey);
 
   const outputFormat =
     process.env.ELEVENLABS_OUTPUT_FORMAT ||
@@ -261,6 +275,8 @@ const synthesizeSpeech = async (text) => {
     return null;
   }
 
+  validateElevenLabsKey(elevenLabsKey);
+
   const normalizedText = String(text || "").trim();
   if (!normalizedText) return null;
 
@@ -305,6 +321,8 @@ const streamSpeech = async (text, res) => {
   if (!elevenLabsKey) {
     throw new Error("ELEVENLABS_API_KEY is not set");
   }
+
+  validateElevenLabsKey(elevenLabsKey);
 
   let ttsResponse;
   try {

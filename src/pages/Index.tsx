@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, FormEvent } from "react";
 import { motion } from "framer-motion";
-import { ArrowUpRight, ExternalLink, Send, X } from "lucide-react";
+import { ArrowUpRight, ExternalLink, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import VoiceOrb from "../components/VoiceOrb.tsx";
 import StatusBar from "../components/StatusBar.tsx";
@@ -444,45 +444,23 @@ const Index = () => {
   }, [messages]);
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background">
-      <div className="fixed right-4 top-4 z-20 h-[min(17.6rem,calc(100vh-2rem))] w-[min(27.2rem,calc(100vw-2rem))] sm:h-[min(19.2rem,calc(100vh-2rem))] sm:w-[min(28.8rem,calc(100vw-2rem))] md:h-[min(20.8rem,calc(100vh-2rem))] md:w-[min(32rem,calc(100vw-2rem))]">
+    <div className="relative h-screen w-full overflow-hidden bg-background">
+      {/* Background layer with JarvisParticles and ATHINA Avatar mixing */}
+      <JarvisParticles isSpeaking={isSpeaking} isActive={isActive} />
+
+      <div className="fixed inset-0 z-0 flex flex-col items-center justify-center pointer-events-none">
+        <div className="pointer-events-auto flex flex-col items-center gap-4">
+          <VoiceOrb isActive={isActive} isSpeaking={isSpeaking} onClick={handleOrbClick} />
+          <StatusBar status={voiceStatus} isSpeaking={isSpeaking} />
+        </div>
+      </div>
+
+      {/* Floating Map Widget */}
+      <div className="fixed right-4 top-16 z-20 h-[min(17.6rem,calc(100vh-6rem))] w-[min(27.2rem,calc(100vw-2rem))] sm:h-[min(19.2rem,calc(100vh-6rem))] sm:w-[min(28.8rem,calc(100vw-2rem))] md:h-[min(20.8rem,calc(100vh-6rem))] md:w-[min(32rem,calc(100vw-2rem))]">
         <WorldMap target={mapTarget} onSelectLocation={handleSelectLocation} className="h-full w-full" />
       </div>
 
-      <JarvisParticles isSpeaking={isSpeaking} isActive={isActive} />
-
-      <motion.header className="fixed left-0 right-0 top-0 z-20 flex items-center justify-between px-6 py-4">
-        <span className="font-mono text-[10px] tracking-[0.4em] text-cyan-300/70">ATHINA v2</span>
-        <div className="flex items-center gap-3">
-          <Link
-            to="/proposal-validator"
-            className="inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.22em] text-emerald-200 transition hover:bg-emerald-400/20"
-          >
-            Proposal Validator
-            <ArrowUpRight className="h-3.5 w-3.5" />
-          </Link>
-          <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-white/35">
-            {isConnecting ? "connecting" : isProcessing ? "processing" : isVoiceSessionOpen ? "voice session live" : "online"}
-          </span>
-        </div>
-      </motion.header>
-
-      <div className="relative z-30 flex w-full max-w-4xl flex-col items-center gap-6 px-4">
-        <motion.div
-          className="space-y-1 text-center"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-        >
-          <h1 className="bg-gradient-to-r from-blue-400 via-cyan-300 to-blue-500 bg-clip-text text-transparent drop-shadow-[0_0_12px_rgba(59,130,246,0.6)]">
-            ATHINA
-          </h1>
-        </motion.div>
-
-        <VoiceOrb isActive={isActive} isSpeaking={isSpeaking} onClick={handleOrbClick} />
-        <StatusBar status={voiceStatus} isSpeaking={isSpeaking} />
-      </div>
-
+      {/* Browser Target Overlay */}
       {browserTarget && (
         <motion.div
           initial={{ opacity: 0, y: 16 }}
@@ -522,7 +500,7 @@ const Index = () => {
           </div>
 
           <div className="grid h-[calc(100%-3.25rem)] grid-cols-1 gap-3 p-4 md:grid-cols-[1.05fr_0.95fr]">
-            <div className="rounded-3xl border border-cyan-300/10 bg-slate-950/90 p-4 text-sm leading-6 text-slate-100 shadow-inner shadow-cyan-500/5">
+            <div className="rounded-3xl border border-cyan-300/10 bg-slate-950/90 p-4 text-sm leading-6 text-slate-100 shadow-inner shadow-cyan-500/5 overflow-y-auto">
               <div className="mb-3 flex items-center gap-2 text-[11px] uppercase tracking-[0.25em] text-cyan-300/70">
                 <span className="inline-flex h-2 w-2 rounded-full bg-cyan-400" />
                 Internet briefing
@@ -580,45 +558,96 @@ const Index = () => {
         </motion.div>
       )}
 
-      <div className="absolute bottom-6 right-6 z-40 w-[min(430px,calc(100%-3rem))] rounded-lg border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/40 backdrop-blur-xl">
-        <div ref={scrollRef} className="max-h-[320px] space-y-3 overflow-y-auto px-4 py-4">
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`text-sm ${msg.role === "user" ? "text-right text-white/80" : "text-left text-emerald-300"}`}
-            >
-              <div className="inline-block max-w-full rounded-lg border border-white/10 bg-white/5 px-4 py-3">
-                {msg.role === "agent" ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
-                ) : (
-                  msg.text
-                )}
-              </div>
-            </div>
-          ))}
+      {/* Full screen Chat App (Claude/GPT style) */}
+      <div id="app" className="athina-chat-app">
+        <header>
+          <span className="brand-dot" />
+          <span className="brand-name">ATHINA</span>
+          <Link
+            to="/proposal-validator"
+            className="ml-3 inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-emerald-200 transition hover:bg-emerald-400/20"
+          >
+            Proposal Validator
+            <ArrowUpRight className="h-3 w-3" />
+          </Link>
+          <span className={`status ${isActive ? "active" : ""}`} id="statusLabel">
+            {isConnecting ? "connecting" : isProcessing ? "processing" : isVoiceSessionOpen ? "voice live" : "online"}
+          </span>
+        </header>
 
-          {isProcessing && (
-            <div className="text-left font-mono text-xs text-emerald-400/60">ATHINA is executing...</div>
-          )}
+        <div id="chatWindow" ref={scrollRef}>
+          <div id="messages">
+            {messages.length === 0 ? (
+              <div className="empty-state" id="emptyState">
+                <h1>What's on your mind?</h1>
+                <p>Type below, or use the mic to talk to Athina directly.</p>
+              </div>
+            ) : (
+              messages.map((msg) => (
+                <div key={msg.id} className={`row ${msg.role === "user" ? "user" : "assistant"}`}>
+                  {msg.role === "agent" && <div className="avatar-chip">A</div>}
+                  <div className="bubble">
+                    {msg.role === "agent" ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                    ) : (
+                      msg.text
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+
+            {isProcessing && (
+              <div className="row assistant">
+                <div className="avatar-chip">A</div>
+                <div className="bubble">
+                  <div className="typing-dots">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        <form onSubmit={handleTextSubmit} className="flex items-center gap-3 border-t border-emerald-400/20 px-4 py-3">
-          <input
-            type="text"
-            value={inputText}
-            onChange={(event) => setInputText(event.target.value)}
-            placeholder="Ask ATHINA to locate, browse, or answer..."
-            className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/50"
-          />
-          <button
-            type="submit"
-            disabled={isProcessing}
-            className="inline-flex h-9 w-9 items-center justify-center rounded border border-emerald-300/30 bg-emerald-400 text-black disabled:cursor-not-allowed disabled:opacity-50"
-            title="Send"
-          >
-            <Send className="h-4 w-4" />
-          </button>
-        </form>
+        <div id="composerWrap">
+          <form id="composer" onSubmit={handleTextSubmit}>
+            <input
+              id="chatInput"
+              type="text"
+              value={inputText}
+              onChange={(event) => setInputText(event.target.value)}
+              placeholder="Message Athina…"
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              onClick={handleOrbClick}
+              className={`icon-btn mic ${isRecording || isVoiceSessionOpen ? "recording" : ""}`}
+              id="micBtn"
+              title="Speak to Athina"
+              aria-label="Voice input"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M12 15a3 3 0 003-3V6a3 3 0 10-6 0v6a3 3 0 003 3z" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M19 11a7 7 0 01-14 0M12 18v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="submit"
+              disabled={isProcessing || !inputText.trim()}
+              className="icon-btn send"
+              id="sendBtn"
+              aria-label="Send message"
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+                <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );

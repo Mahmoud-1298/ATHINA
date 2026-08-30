@@ -1,12 +1,20 @@
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Orbitron:wght@400;500;700;900&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
+    --blue-bright: #00e5ff;
+    --blue: #00b4d8;
+    --blue-deep: #03045e;
+    --line: rgba(255, 255, 255, 0.1);
+    --text: #f8fafc;
+    --text-dim: #94a3b8;
+    --panel: rgba(15, 23, 42, 0.75);
+    --bubble: rgba(255, 255, 255, 0.07);
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
     --card: 0 0% 100%;
     --card-foreground: 0 0% 3.9%;
     --popover: 0 0% 100%;
@@ -163,3 +171,209 @@
   z-index: 9998;
   background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.4) 100%);
 }
+
+/* ================= CHAT (Claude/GPT style, scoped) ================= */
+.athina-chat-app {
+  position: relative;
+  z-index: 10;
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.athina-chat-app > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  background: rgba(10, 14, 20, 0.4);
+  backdrop-filter: blur(12px);
+}
+.athina-chat-app > header .brand-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--blue-bright);
+  box-shadow: 0 0 8px var(--blue-bright);
+}
+.athina-chat-app > header .brand-name {
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+.athina-chat-app > header .status {
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.athina-chat-app > header .status.active { color: var(--blue-bright); }
+
+.athina-chat-app #chatWindow {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.15) transparent;
+}
+.athina-chat-app #chatWindow::-webkit-scrollbar { width: 6px; }
+.athina-chat-app #chatWindow::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 6px; }
+
+.athina-chat-app #messages {
+  width: 100%;
+  max-width: 720px;
+  padding: 36px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.athina-chat-app .empty-state {
+  margin: auto;
+  text-align: center;
+  color: var(--text-dim);
+  padding-top: 18vh;
+}
+.athina-chat-app .empty-state h1 {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.athina-chat-app .empty-state p { font-size: 14px; }
+
+.athina-chat-app .row { display: flex; gap: 12px; animation: rise 320ms ease both; }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+.athina-chat-app .row.user { justify-content: flex-end; }
+.athina-chat-app .row.assistant { justify-content: flex-start; }
+
+.athina-chat-app .avatar-chip {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--blue-bright), var(--blue-deep));
+  flex-shrink: 0;
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #04101f;
+}
+
+.athina-chat-app .bubble {
+  max-width: 75%;
+  font-size: 15px;
+  line-height: 1.6;
+}
+.athina-chat-app .row.user .bubble {
+  background: var(--bubble);
+  border: 1px solid var(--line);
+  padding: 11px 16px;
+  border-radius: 16px;
+  border-bottom-right-radius: 5px;
+  color: var(--text);
+}
+.athina-chat-app .row.assistant .bubble {
+  color: var(--text);
+  padding-top: 2px;
+}
+.athina-chat-app .bubble p { margin-bottom: 0.5rem; }
+.athina-chat-app .bubble p:last-child { margin-bottom: 0; }
+.athina-chat-app .bubble ul, .athina-chat-app .bubble ol { margin-left: 1.25rem; margin-bottom: 0.5rem; }
+.athina-chat-app .bubble ul { list-style-type: disc; }
+.athina-chat-app .bubble ol { list-style-type: decimal; }
+.athina-chat-app .bubble code {
+  background: rgba(255,255,255,0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+}
+.athina-chat-app .bubble pre {
+  background: rgba(0,0,0,0.4);
+  padding: 12px 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  margin: 8px 0;
+}
+.athina-chat-app .bubble pre code { background: none; padding: 0; }
+
+.athina-chat-app .typing-dots {
+  display: flex; gap: 4px; padding: 6px 0 0 2px;
+}
+.athina-chat-app .typing-dots span {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--blue-bright);
+  animation: bounce 1.1s infinite ease-in-out;
+}
+.athina-chat-app .typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.athina-chat-app .typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes bounce { 0%,80%,100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
+
+/* ---------------- Composer ---------------- */
+.athina-chat-app #composerWrap {
+  display: flex;
+  justify-content: center;
+  padding: 14px 20px 22px;
+  flex-shrink: 0;
+}
+
+.athina-chat-app #composer {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 26px;
+  padding: 8px 8px 8px 20px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+  backdrop-filter: blur(12px);
+}
+
+.athina-chat-app #chatInput {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  font-size: 15px;
+  padding: 10px 0;
+}
+.athina-chat-app #chatInput::placeholder { color: var(--text-dim); }
+
+.athina-chat-app .icon-btn {
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  border: none;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  background: rgba(255,255,255,0.05);
+  color: var(--text-dim);
+  transition: background 200ms ease, color 200ms ease, transform 200ms ease;
+  flex-shrink: 0;
+}
+.athina-chat-app .icon-btn:hover { background: rgba(255,255,255,0.09); color: var(--text); }
+.athina-chat-app .icon-btn.mic.recording {
+  background: rgba(47,143,255,0.18);
+  color: var(--blue-bright);
+  animation: micPulse 1.4s infinite ease-in-out;
+}
+@keyframes micPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(47,143,255,0.35); } 50% { box-shadow: 0 0 0 8px rgba(47,143,255,0); } }
+
+.athina-chat-app .icon-btn.send {
+  background: linear-gradient(180deg, var(--blue-bright), var(--blue));
+  color: #04101f;
+}
+.athina-chat-app .icon-btn.send:disabled { opacity: 0.35; cursor: default; }
+.athina-chat-app .icon-btn.send:not(:disabled):hover { transform: translateY(-1px); }

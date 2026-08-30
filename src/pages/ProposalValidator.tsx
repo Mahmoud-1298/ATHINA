@@ -736,17 +736,17 @@ const ProposalValidator = () => {
             <div className="min-h-0 flex-1 overflow-y-auto bg-[#F7F9F5] p-4 sm:p-6">
               <div className="overflow-hidden rounded-3xl border border-[#DCEAB8] bg-white shadow-[0_12px_40px_rgba(83,85,89,0.08)]">
                 <style>{`
-                  #proposal-athina-chat > div { background: #ffffff !important; color: #17211D !important; }
-                  #proposal-athina-chat [class*="bg-[#0a0e14]"] { background: #ffffff !important; }
-                  #proposal-athina-chat [class*="bg-slate-800"] { background: #F3F9E6 !important; }
-                  #proposal-athina-chat [class*="border-slate"] { border-color: #DCEAB8 !important; }
-                  #proposal-athina-chat [class*="text-slate-2"],
-                  #proposal-athina-chat [class*="text-slate-3"] { color: #17211D !important; }
-                  #proposal-athina-chat [class*="text-slate-4"],
-                  #proposal-athina-chat [class*="text-slate-5"] { color: #64746C !important; }
-                  #proposal-athina-chat [class*="text-cyan"] { color: #527600 !important; }
-                  #proposal-athina-chat [class*="bg-cyan"] { background-color: rgba(132,189,0,0.12) !important; }
-                  #proposal-athina-chat [class*="border-cyan"] { border-color: rgba(132,189,0,0.35) !important; }
+                  #proposal-athina-chat {
+                    --blue-bright: #527600;
+                    --blue: #6b9e00;
+                    --blue-deep: #3a5400;
+                    --line: #DCEAB8;
+                    --text: #17211D;
+                    --text-dim: #64746C;
+                    --panel: #ffffff;
+                    --bubble: #F3F9E6;
+                  }
+                  #proposal-athina-chat { background: #ffffff; }
                   #proposal-athina-chat input { background: #F7F9F5 !important; color: #17211D !important; border-color: #DCEAB8 !important; }
                   #proposal-athina-chat input:focus { border-color: #84BD00 !important; }
                   #proposal-athina-chat { scrollbar-color: #84BD00 #F3F9E6; }

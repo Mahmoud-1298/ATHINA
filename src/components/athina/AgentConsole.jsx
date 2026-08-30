@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { invokeFunction } from '@/lib/functionApi';
 import { sendAgentMessage } from '@/lib/athinaApi.ts';
 import { useAthinaVoice } from '@/hooks/useAthinaVoice';
-import { Send, Loader2, Sparkles, MapPin, CloudSun, Clock, Search, Github, Square, Power } from 'lucide-react';
+import { Send, Loader2, Mic, MapPin, CloudSun, Clock, Search, Github, Square, Power } from 'lucide-react';
 
 function ActionCard({ action }) {
   if (action.error) {
@@ -120,7 +120,7 @@ function ActionCard({ action }) {
   return null;
 }
 
-export default function AgentConsole({ onActions, onAvatarState }) {
+export default function AgentConsole({ onActions, onAvatarState, showHeader = true }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -256,111 +256,122 @@ export default function AgentConsole({ onActions, onAvatarState }) {
   };
 
   const suggestions = [
-    
+
   ];
 
   return (
-    <div className="h-full flex flex-col bg-[#0a0e14]/95 backdrop-blur-md">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-700/30 shrink-0">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-3.5 h-3.5 text-cyan-400/80" />
-          <span className="text-[11px] font-semibold text-slate-200/90 tracking-wider uppercase font-mono">ATHINA</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {voice.speaking && (
-            <button
-              onClick={voice.stopVoice}
-              className="w-7 h-7 flex items-center justify-center rounded-md bg-red-500/15 border border-red-500/20 text-red-400 hover:bg-red-500/25 transition-colors animate-pulse"
-              title="Stop voice"
-            >
-              <Square className="w-3 h-3" />
-            </button>
-          )}
-          <button
-            onClick={voice.toggleWakeMode}
-            disabled={!voice.voiceSupported || loading}
-            className={`w-7 h-7 flex items-center justify-center rounded-md border transition-all disabled:opacity-30 ${
-              voice.wakeMode
-                ? 'bg-cyan-500/15 border-cyan-500/25 text-cyan-400 shadow-[0_0_14px_rgba(0,229,255,0.5)] animate-pulse-subtle'
-                : 'bg-slate-800/40 border-slate-700/30 text-slate-500 hover:text-slate-300'
-            }`}
-            title="Power ATHINA on/off"
-          >
-            <Power className="w-3.5 h-3.5" />
-          </button>
-          {loading && <Loader2 className="w-3.5 h-3.5 text-cyan-500/50 animate-spin" />}
-        </div>
-      </div>
-
-      {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-3 min-h-0">
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center gap-3">
-            <Sparkles className="w-6 h-6 text-cyan-500/30" />
-            
-            <div className="flex flex-wrap gap-1.5 justify-center mt-1">
-              {suggestions.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setInput(s)}
-                  className="px-2 py-0.5 rounded-full bg-slate-800/40 border border-slate-700/30 text-[10px] text-slate-400/70 hover:bg-slate-700/40 hover:text-slate-200 transition-colors"
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {messages.map((msg, i) => (
-          <div key={i} className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-            <div className="max-w-[90%]">
-              {msg.role === 'assistant' && (
-                <span className="text-[9px] text-cyan-500/40 uppercase tracking-widest font-mono ml-1">ATHINA</span>
-              )}
-              <div
-                className={
-                  msg.role === 'user'
-                    ? 'bg-cyan-500/10 border border-cyan-500/15 rounded-lg px-3 py-2 text-sm text-slate-100/90'
-                    : 'bg-slate-800/30 border border-slate-700/20 rounded-lg px-3 py-2 text-sm text-slate-200/80'
-                }
+    <div id="app" className="athina-chat-app">
+      {showHeader && (
+        <header>
+          <span className="brand-dot" />
+          <span className="brand-name">ATHINA</span>
+          <div className="ml-2 flex items-center gap-1.5">
+            {voice.speaking && (
+              <button
+                onClick={voice.stopVoice}
+                className="w-6 h-6 flex items-center justify-center rounded-md bg-red-500/15 border border-red-500/20 text-red-400 hover:bg-red-500/25 transition-colors animate-pulse"
+                title="Stop voice"
               >
+                <Square className="w-3 h-3" />
+              </button>
+            )}
+            <button
+              onClick={voice.toggleWakeMode}
+              disabled={!voice.voiceSupported || loading}
+              className={`w-6 h-6 flex items-center justify-center rounded-md border transition-all disabled:opacity-30 ${
+                voice.wakeMode
+                  ? 'bg-cyan-500/15 border-cyan-500/25 text-cyan-400 shadow-[0_0_14px_rgba(0,229,255,0.5)] animate-pulse-subtle'
+                  : 'bg-slate-800/40 border-slate-700/30 text-slate-500 hover:text-slate-300'
+              }`}
+              title="Power ATHINA on/off"
+            >
+              <Power className="w-3 h-3" />
+            </button>
+          </div>
+          <span className={`status ${loading || voice.speaking || voice.listening ? 'active' : ''}`}>
+            {loading ? 'thinking' : voice.speaking ? 'speaking' : voice.listening ? 'listening' : voice.wakeMode ? 'wake mode' : 'online'}
+          </span>
+          {loading && <Loader2 className="w-3.5 h-3.5 text-cyan-500/50 animate-spin ml-1.5" />}
+        </header>
+      )}
+
+      <div id="chatWindow" ref={scrollRef}>
+        <div id="messages">
+          {messages.length === 0 && (
+            <div className="empty-state">
+              <h1>What's on your mind?</h1>
+              <p>Type below, or use the mic to talk to Athina directly.</p>
+              {suggestions.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 justify-center mt-3">
+                  {suggestions.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setInput(s)}
+                      className="px-2 py-0.5 rounded-full bg-slate-800/40 border border-slate-700/30 text-[10px] text-slate-400/70 hover:bg-slate-700/40 hover:text-slate-200 transition-colors"
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {messages.map((msg, i) => (
+            <div key={i} className={`row ${msg.role === 'user' ? 'user' : 'assistant'}`}>
+              {msg.role === 'assistant' && <div className="avatar-chip">A</div>}
+              <div className="bubble">
                 <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                 {msg.actions?.map((a, idx) => <ActionCard key={idx} action={a} />)}
               </div>
             </div>
-          </div>
-        ))}
-        {loading && (
-          <div className="flex justify-start">
-            <div className="flex items-center gap-2 px-3 py-2">
-              <div className="flex gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500/50 animate-pulse" />
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500/50 animate-pulse" style={{ animationDelay: '0.2s' }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500/50 animate-pulse" style={{ animationDelay: '0.4s' }} />
+          ))}
+
+          {loading && (
+            <div className="row assistant">
+              <div className="avatar-chip">A</div>
+              <div className="bubble">
+                <div className="typing-dots">
+                  <span />
+                  <span />
+                  <span />
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {/* Input */}
-      <form onSubmit={send} className="px-3 py-2.5 border-t border-slate-700/30 shrink-0 flex items-center gap-2">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={voice.wakeMode ? 'Type or speak to ATHINA...' : 'Ask ATHINA...'}
-          disabled={loading}
-          className="flex-1 bg-slate-800/40 text-slate-200 placeholder:text-slate-500/50 px-3 py-1.5 rounded-lg border border-slate-700/30 focus:border-cyan-500/30 focus:outline-none text-sm disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={loading || !input.trim()}
-          className="w-8 h-8 flex items-center justify-center rounded-lg bg-cyan-500/15 border border-cyan-500/20 text-cyan-400 hover:bg-cyan-500/25 disabled:opacity-30 transition-colors shrink-0"
-        >
-          <Send className="w-3.5 h-3.5" />
-        </button>
-      </form>
+      <div id="composerWrap">
+        <form id="composer" onSubmit={send}>
+          <input
+            id="chatInput"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={voice.wakeMode ? 'Type or speak to ATHINA...' : 'Message Athina…'}
+            disabled={loading}
+            autoComplete="off"
+          />
+          <button
+            type="button"
+            onClick={voice.toggleWakeMode}
+            disabled={!voice.voiceSupported || loading}
+            className={`icon-btn mic ${voice.wakeMode || voice.listening ? 'recording' : ''}`}
+            title="Speak to Athina"
+            aria-label="Voice input"
+          >
+            <Mic className="w-4 h-4" />
+          </button>
+          <button
+            type="submit"
+            disabled={loading || !input.trim()}
+            className="icon-btn send"
+            aria-label="Send message"
+          >
+            <Send className="w-3.5 h-3.5" />
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

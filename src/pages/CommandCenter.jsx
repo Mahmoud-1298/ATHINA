@@ -6,18 +6,16 @@ import {
   MapPin,
   Sparkles,
 } from 'lucide-react';
-import DarkMap from '@/components/athina/DarkMap';
 import AthinaAvatar from '@/components/athina/AthinaAvatar';
 import AgentConsole from '@/components/athina/AgentConsole';
+import GoogleMapPopup from '@/components/athina/GoogleMapPopup';
 import { BACKEND_BASE_URL } from '@/lib/functionApi';
 import { getClientIdentity } from '@/lib/clientIdentity';
 
 export default function CommandCenter() {
-  const [mapMarkers, setMapMarkers] = useState([]);
-  const [mapFlyTo, setMapFlyTo] = useState(null);
   const [clock, setClock] = useState(new Date());
   const [userName, setUserName] = useState('');
-  const [activeLocation, setActiveLocation] = useState(null);
+  const [mapPopup, setMapPopup] = useState(null);
   const [avatarState, setAvatarState] = useState('idle');
 
   useEffect(() => {
@@ -40,25 +38,40 @@ export default function CommandCenter() {
     setUserName('Operator');
   }, []);
 
+  // The map only appears as a popup for navigation/traffic/location requests.
   const handleActions = (actions) => {
+    const traffic = actions.find((action) => action.type === 'traffic' && !action.error && action.success);
+    if (traffic) {
+      const originName = traffic.from?.name || traffic.from?.query || 'Origin';
+      const destName = traffic.to?.name || traffic.to?.query || 'Destination';
+      setMapPopup({
+        mode: 'directions',
+        originQuery: traffic.from?.name || `${traffic.from?.lat},${traffic.from?.lng}`,
+        destinationQuery: traffic.to?.name || `${traffic.to?.lat},${traffic.to?.lng}`,
+        title: `${originName} → ${destName}`,
+        subtitle: `${traffic.distanceKm} km · ~${traffic.durationMinutes} min drive`,
+      });
+      return;
+    }
+
     const loc = actions.find(
-      (action) => ['geocode', 'locate'].includes(action.type) && !action.error,
+      (action) => ['geocode', 'locate'].includes(action.type) && !action.error && action.lat && action.lng,
     );
     const weather = actions.find(
-      (action) => action.type === 'get_weather' && !action.error,
+      (action) => action.type === 'get_weather' && !action.error && action.lat && action.lng,
     );
     const target = loc || weather;
 
-    if (target && target.lat && target.lng) {
-      setMapMarkers([
-        {
-          lat: target.lat,
-          lng: target.lng,
-          name: target.name || target.location || '',
-        },
-      ]);
-      setMapFlyTo([target.lat, target.lng]);
-      setActiveLocation(target);
+    if (target) {
+      const name = target.name || target.location || `${target.lat}, ${target.lng}`;
+      setMapPopup({
+        mode: 'place',
+        query: name,
+        title: name,
+        subtitle: target.temperature
+          ? `${target.temperature}°C · ${target.condition || ''}`
+          : `${target.lat.toFixed(4)}°, ${target.lng.toFixed(4)}°`,
+      });
     }
   };
 
@@ -77,14 +90,12 @@ export default function CommandCenter() {
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#070816] text-white">
-      {/* Contextual map canvas. It stays fully functional but visually recedes behind ATHINA. */}
-      <div className="absolute inset-0 opacity-90">
-        <DarkMap markers={mapMarkers} flyTo={mapFlyTo} />
-      </div>
-
-      {/* Ambient visual layers create a distinctive ATHINA identity without blocking the map. */}
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(7,8,22,0.20)_0%,rgba(7,8,22,0.04)_42%,rgba(7,8,22,0.68)_100%)]" />
+      {/* Ambient visual layers create a distinctive ATHINA identity. */}
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(124,58,237,0.14)_0%,transparent_55%)]" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[36%] bg-gradient-to-t from-[#070816]/90 via-[#070816]/45 to-transparent" />
+
+      {/* Map appears only when ATHINA answers a navigation/traffic/location question. */}
+      <GoogleMapPopup data={mapPopup} onClose={() => setMapPopup(null)} />
 
       {/* Minimal floating navigation. Every interactive item has a real destination. */}
       <header className="absolute left-1/2 top-4 z-[1200] flex w-[calc(100%-1.5rem)] max-w-6xl -translate-x-1/2 items-center justify-between rounded-2xl border border-white/10 bg-[#0b0d1d]/70 px-3 py-2.5 shadow-2xl shadow-black/30 backdrop-blur-2xl sm:px-4">
@@ -155,38 +166,12 @@ export default function CommandCenter() {
         </div>
       </section>
 
-      {/* Location appears as contextual information, not a command-center widget. */}
-      {activeLocation ? (
-        <div className="absolute left-1/2 top-[48%] z-[1000] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 sm:top-[51%]">
-          <div className="flex items-center gap-3 rounded-2xl border border-cyan-300/15 bg-[#0b1021]/75 px-4 py-3 shadow-xl shadow-black/25 backdrop-blur-xl">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-cyan-400/10 text-cyan-300">
-              <MapPin className="h-4 w-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-slate-100">
-                {activeLocation.name || activeLocation.location || 'Selected point'}
-              </p>
-              <p className="mt-0.5 font-mono text-[10px] text-slate-400">
-                {activeLocation.lat?.toFixed(4)}°, {activeLocation.lng?.toFixed(4)}°
-                {activeLocation.temperature
-                  ? `  ·  ${activeLocation.temperature}°C  ·  ${activeLocation.condition || ''}`
-                  : ''}
-              </p>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {/*
         Centered conversation surface.
-        AgentConsole remains unchanged, so all of its existing API and composer behavior is preserved.
-        Placing the component here moves its input to the familiar centered-bottom AI layout.
+        No card/box wrapper: messages and composer float directly over the
+        ambient background, matching the Copilot/GPT/Claude chat style.
       */}
-      <main className="absolute inset-x-0 bottom-4 z-[1200] mx-auto w-[calc(100%-1.25rem)] max-w-5xl sm:bottom-6 sm:w-[calc(100%-3rem)]">
-       <h2 className="mb-4 text-center text-xl font-semibold tracking-tight text-white drop-shadow-[0_4px_18px_rgba(0,0,0,0.55)] sm:text-2xl">
-          How can I help you Mahmoud?
-        </h2>
-
+      <main className="absolute inset-x-0 top-24 bottom-4 z-[1200] mx-auto flex w-[calc(100%-1.25rem)] max-w-3xl flex-col sm:bottom-6 sm:w-[calc(100%-3rem)]">
         <style>{`
           /* Hide optional starter prompts without changing AgentConsole APIs. */
           #athina-chat-shell [data-suggestions],
@@ -234,11 +219,9 @@ export default function CommandCenter() {
             background: #0b0d1d;
           }
         `}</style>
-        <div
-          id="athina-chat-shell"
-          className="h-[250px] overflow-hidden rounded-[28px] border border-white/15 bg-[#0b0d1d]/88 shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop-blur-2xl sm:h-[168px]"
-        >
+        <div id="athina-chat-shell" className="min-h-0 flex-1">
           <AgentConsole
+            showHeader={false}
             onActions={handleActions}
             onAvatarState={setAvatarState}
           />
