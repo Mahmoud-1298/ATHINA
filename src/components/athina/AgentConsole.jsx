@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { invokeFunction } from '@/lib/functionApi';
-import { sendAgentMessage } from '@/lib/athinaApi.ts';
+import { streamAgentMessage } from '@/lib/athinaApi.ts';
 import { useAthinaVoice } from '@/hooks/useAthinaVoice';
 import { Send, Loader2, Mic, MapPin, CloudSun, Clock, Search, Github, Square, Power } from 'lucide-react';
 
@@ -178,12 +178,31 @@ export default function AgentConsole({ onActions, onAvatarState, showHeader = tr
       return;
     }
     const userMsg = { role: 'user', content: text };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => [...prev, userMsg, { role: 'assistant', content: '', actions: [] }]);
     setInput('');
     setLoading(true);
+
+    const appendToLastAssistant = (updater) => {
+      setMessages((prev) => {
+        const next = [...prev];
+        const lastIndex = next.length - 1;
+        if (next[lastIndex]?.role === 'assistant') {
+          next[lastIndex] = updater(next[lastIndex]);
+        }
+        return next;
+      });
+    };
+
     try {
-      const data = await sendAgentMessage(text, sessionId, 'text');
-      setMessages((prev) => [...prev, { role: 'assistant', content: data.reply, actions: data.actions || [] }]);
+      const data = await streamAgentMessage(text, sessionId, (delta) => {
+        appendToLastAssistant((msg) => ({ ...msg, content: (msg.content || '') + delta }));
+      });
+
+      appendToLastAssistant((msg) => ({
+        ...msg,
+        content: data.reply || msg.content,
+        actions: data.actions || [],
+      }));
       if (onActions && data.actions) onActions(data.actions);
 
       // Client-side geocoding fallback: if agent didn't return location, try ourselves
@@ -210,7 +229,10 @@ export default function AgentConsole({ onActions, onAvatarState, showHeader = tr
       // Voice responses are handled by ElevenLabs WebSocket.
     } catch (err) {
       const errorMsg = err.response?.data?.error || err.message || 'Failed to get response';
-      setMessages((prev) => [...prev, { role: 'assistant', content: 'I encountered an error: ' + errorMsg }]);
+      appendToLastAssistant((msg) => ({
+        ...msg,
+        content: msg.content || 'I encountered an error: ' + errorMsg,
+      }));
     } finally {
       setLoading(false);
     }
@@ -220,18 +242,35 @@ export default function AgentConsole({ onActions, onAvatarState, showHeader = tr
 
   const voice = useAthinaVoice({
     onUserTranscript: (text) => {
-      setMessages((prev) => [...prev, { role: 'user', content: text }]);
+      setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', actions: [] }]);
       setLoading(true);
+
+      const appendToLastAssistant = (updater) => {
+        setMessages((prev) => {
+          const next = [...prev];
+          const lastIndex = next.length - 1;
+          if (next[lastIndex]?.role === 'assistant') {
+            next[lastIndex] = updater(next[lastIndex]);
+          }
+          return next;
+        });
+      };
+
       // Keep reasoning on the session-aware agent endpoint and stream speech separately.
-      voiceActionPromiseRef.current = sendAgentMessage(text, sessionId, 'voice')
+      voiceActionPromiseRef.current = streamAgentMessage(text, sessionId, (delta) => {
+        appendToLastAssistant((msg) => ({ ...msg, content: (msg.content || '') + delta }));
+      })
         .then((data) => {
           if (onActions && data.actions) onActions(data.actions);
           if (data.reply) voice.streamText(data.reply);
-          setMessages((prev) => [...prev, { role: 'assistant', content: data.reply, actions: data.actions || [] }]);
+          appendToLastAssistant((msg) => ({ ...msg, content: data.reply || msg.content, actions: data.actions || [] }));
           return data;
         })
         .catch((error) => {
-          setMessages((prev) => [...prev, { role: 'assistant', content: `Voice request failed: ${error?.message || 'unknown error'}` }]);
+          appendToLastAssistant((msg) => ({
+            ...msg,
+            content: msg.content || `Voice request failed: ${error?.message || 'unknown error'}`,
+          }));
           return null;
         })
         .finally(() => setLoading(false));
@@ -327,28 +366,29 @@ export default function AgentConsole({ onActions, onAvatarState, showHeader = tr
             </div>
           )}
 
-          {messages.map((msg, i) => (
-            <div key={i} className={`row ${msg.role === 'user' ? 'user' : 'assistant'}`}>
-              {msg.role === 'assistant' && <div className="avatar-chip">A</div>}
-              <div className="bubble">
-                <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
-                {msg.actions?.map((a, idx) => <ActionCard key={idx} action={a} />)}
-              </div>
-            </div>
-          ))}
+          {messages.map((msg, i) => {
+            const isStreamingPlaceholder =
+              loading && i === messages.length - 1 && msg.role === 'assistant' && !msg.content;
 
-          {loading && (
-            <div className="row assistant">
-              <div className="avatar-chip">A</div>
-              <div className="bubble">
-                <div className="typing-dots">
-                  <span />
-                  <span />
-                  <span />
+            return (
+              <div key={i} className={`row ${msg.role === 'user' ? 'user' : 'assistant'}`}>
+                {msg.role === 'assistant' && <div className="avatar-chip">A</div>}
+                <div className="bubble">
+                  {isStreamingPlaceholder ? (
+                    <div className="typing-dots">
+                      <span />
+                      <span />
+                      <span />
+                    </div>
+                  ) : (
+                    <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                  )}
+                  {msg.actions?.map((a, idx) => <ActionCard key={idx} action={a} />)}
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })}
+
         </div>
       </div>
 

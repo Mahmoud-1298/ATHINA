@@ -27,6 +27,7 @@ import {
 import {
   getQuickReply,
   buildCompactExecutionReply,
+  streamCompactExecutionReply,
 } from "./llmManager.js";
 import { getEmbedding } from "./utils/embeddingClient.js";
 
@@ -1841,6 +1842,7 @@ export const orchestrate = async ({
   userId = null,
   mode = "text",
   locationContext = null,
+  onReplyChunk = null,
 }) => {
   const timestamp = () =>
     new Date().toISOString();
@@ -2499,8 +2501,9 @@ export const orchestrate = async ({
      13. FINAL RESPONSE
      --------------------------------------------------------- */
 
-  const finalReply =
-    await buildCompactExecutionReply(executed);
+  const finalReply = onReplyChunk
+    ? await streamCompactExecutionReply(executed, onReplyChunk)
+    : await buildCompactExecutionReply(executed);
 
   await saveTurn(
     sessionId,

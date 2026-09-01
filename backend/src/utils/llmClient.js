@@ -520,6 +520,114 @@ const callCachedModel = async ({
   return result;
 };
 
+/*
+ * Real token-by-token streaming for plain-text (non-JSON) completions.
+ * Falls back to non-streaming callLLM if the streaming request fails
+ * before any tokens were delivered, so callers always get a full reply.
+ */
+export const streamLLM = async ({
+  messages,
+  model,
+  temperature = 0.3,
+  maxTokens = 4000,
+  onToken,
+}) => {
+  const candidateModels = Array.from(
+    new Set(
+      [model || PRIMARY_MODEL, PRIMARY_MODEL, SECONDARY_MODEL]
+        .map((candidate) => String(candidate || "").trim())
+        .filter(Boolean)
+        .filter((candidate) => !isEmbeddingOnlyModel(candidate)),
+    ),
+  );
+
+  if (!process.env.OPENROUTER_API_KEY) {
+    const fullText = await callLLM({ messages, model, temperature, maxTokens });
+    onToken?.(fullText);
+    return fullText;
+  }
+
+  let lastError = null;
+
+  for (const candidate of candidateModels) {
+    let deliveredAny = false;
+    let fullText = "";
+
+    try {
+      const response = await fetchWithTimeout(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + process.env.OPENROUTER_API_KEY,
+            "Content-Type": "application/json",
+            "HTTP-Referer": process.env.PUBLIC_APP_URL || "https://athina.ai",
+            "X-Title": "ATHINA",
+          },
+          body: JSON.stringify({
+            model: candidate,
+            messages,
+            stream: true,
+            temperature,
+            max_tokens: maxTokens,
+          }),
+        },
+        OPENROUTER_TIMEOUT_MS,
+      );
+
+      if (!response.ok || !response.body) {
+        throw new Error(`OpenRouter streaming error ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+
+          const payload = trimmed.slice(5).trim();
+          if (!payload || payload === "[DONE]") continue;
+
+          const parsed = safeJsonParse(payload);
+          const delta = parsed?.choices?.[0]?.delta?.content || "";
+          if (delta) {
+            deliveredAny = true;
+            fullText += delta;
+            onToken?.(delta);
+          }
+        }
+      }
+
+      if (deliveredAny) return fullText;
+      throw new Error(`Model ${candidate} produced no streamed tokens.`);
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[LLM] Streaming model "${candidate}" failed. Trying next model.`,
+        error?.message || error,
+      );
+    }
+  }
+
+  console.warn(
+    "[LLM] All streaming attempts failed, falling back to non-streaming callLLM:",
+    lastError?.message || lastError,
+  );
+  const fullText = await callLLM({ messages, model, temperature, maxTokens });
+  onToken?.(fullText);
+  return fullText;
+};
+
 export const callLLM = async ({
   messages,
   model,

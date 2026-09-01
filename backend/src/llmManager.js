@@ -1,4 +1,4 @@
-import { callLLM } from "./utils/llmClient.js";
+import { callLLM, streamLLM } from "./utils/llmClient.js";
 
 const ATHINA_SYSTEM_PROMPT = [
   "You are ATHINA (Autonomous Thinking Human-like Intelligent Network Assistant).",
@@ -158,16 +158,7 @@ export const getQuickReply = (message) => {
   return null;
 };
 
-export const buildCompactExecutionReply = async (executed) => {
-  if (!Array.isArray(executed) || executed.length === 0) {
-    return "I'm here. How can I help?";
-  }
-
-  const deterministicReply = buildDeterministicExecutionReply(executed);
-  if (deterministicReply) {
-    return deterministicReply;
-  }
-
+const buildExecutionReplyMessages = (executed) => {
   const execution = summarizeExecution(executed);
 
   const resultsSummary = executed.map((task) => {
@@ -182,7 +173,7 @@ export const buildCompactExecutionReply = async (executed) => {
       const urls = (result.results || []).map((r) => r.url).join(", ");
       return '- Searched web for "' + result.query + '". Found URLs: ' + urls;
     }
-    
+
     if (result.type === "calendar") {
 
   const action =
@@ -240,7 +231,7 @@ export const buildCompactExecutionReply = async (executed) => {
   return "- Completed calendar action: " +
          action;
     }
-    
+
     if (result.type === "email") {
       const action = String(result.action || "").toLowerCase();
       if (action === "send") {
@@ -265,7 +256,7 @@ export const buildCompactExecutionReply = async (executed) => {
     return "- Completed: " + (task.description || task.id);
   }).join("\n");
 
-  const messages = [
+  return [
     {
       role: "system",
       content:
@@ -286,6 +277,19 @@ export const buildCompactExecutionReply = async (executed) => {
         resultsSummary,
     }
   ];
+};
+
+export const buildCompactExecutionReply = async (executed) => {
+  if (!Array.isArray(executed) || executed.length === 0) {
+    return "I'm here. How can I help?";
+  }
+
+  const deterministicReply = buildDeterministicExecutionReply(executed);
+  if (deterministicReply) {
+    return deterministicReply;
+  }
+
+  const messages = buildExecutionReplyMessages(executed);
 
   try {
     const reply = await callLLM({ messages, temperature: 0.2, maxTokens: 320 });
@@ -299,5 +303,37 @@ export const buildCompactExecutionReply = async (executed) => {
       if (result.type === "web_search") return "I searched the web for " + result.query + ".";
       return "I completed " + (task.description || task.id) + ".";
     }).join(" ");
+  }
+};
+
+/*
+ * Real-time variant: streams the final reply token-by-token via onToken as
+ * the model generates it, instead of waiting for the full completion.
+ * Deterministic/canned replies still resolve instantly (single onToken call)
+ * since there is nothing to generate.
+ */
+export const streamCompactExecutionReply = async (executed, onToken) => {
+  const emit = (text) => {
+    if (text) onToken?.(text);
+    return text;
+  };
+
+  if (!Array.isArray(executed) || executed.length === 0) {
+    return emit("I'm here. How can I help?");
+  }
+
+  const deterministicReply = buildDeterministicExecutionReply(executed);
+  if (deterministicReply) {
+    return emit(deterministicReply);
+  }
+
+  const messages = buildExecutionReplyMessages(executed);
+
+  try {
+    return await streamLLM({ messages, temperature: 0.2, maxTokens: 320, onToken });
+  } catch (error) {
+    console.warn("[ATHINA] Streaming LLM reply failed, using non-streaming fallback:", error.message);
+    const fallbackReply = await buildCompactExecutionReply(executed);
+    return emit(fallbackReply);
   }
 };

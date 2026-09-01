@@ -269,6 +269,125 @@ export const sendAgentMessage = async (
   }
 };
 
+/*
+ * Real-time streamed variant of sendAgentMessage. Planning and tool
+ * execution must still complete before an answer exists, but the final
+ * reply text is delivered progressively via onDelta as it is generated,
+ * instead of arriving as one block once everything finishes.
+ */
+export const streamAgentMessage = async (
+  message: string,
+  sessionId = getClientIdentity().sessionId,
+  onDelta?: (delta: string) => void,
+  locationContext?: MapLocationContext | null,
+  signal?: AbortSignal
+): Promise<AgentResponse> => {
+  const { userId } = getClientIdentity();
+
+  const normalizedMessage = String(message).trim();
+  if (!normalizedMessage) {
+    throw new Error("Please enter a message for ATHINA.");
+  }
+
+  const url = `${BACKEND_BASE_URL}/api/chat/stream`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-Id": createRequestId(),
+      },
+      body: JSON.stringify({
+        message: normalizedMessage,
+        sessionId,
+        userId,
+        mode: "text",
+        locationContext: locationContext || null,
+      }),
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(
+        `Unable to reach the ATHINA backend at ${url}. ` +
+          "Check the backend URL, deployment status, and browser network connection."
+      );
+    }
+    throw error;
+  }
+
+  if (!response.ok || !response.body) {
+    const data = await parseJsonSafe(response);
+    throw getFetchError(url, response, data);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullReply = "";
+  let finalPayload: any = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+
+      const jsonText = trimmed.slice(5).trim();
+      if (!jsonText) continue;
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(jsonText);
+      } catch {
+        continue;
+      }
+
+      if (parsed.error) {
+        throw new Error(parsed.error);
+      }
+
+      if (typeof parsed.delta === "string") {
+        fullReply += parsed.delta;
+        onDelta?.(parsed.delta);
+      }
+
+      if (parsed.done) {
+        finalPayload = parsed;
+      }
+    }
+  }
+
+  const data = finalPayload || {};
+
+  return {
+    success: data.success === true,
+    reply: data.reply || fullReply || "ATHINA completed the request but returned no message.",
+    actions: Array.isArray(data.actions) ? data.actions : [],
+    sessionId: data.sessionId || sessionId,
+    timestamp: data.timestamp,
+    requestId: data.requestId,
+    audioBase64: data.audioBase64 || null,
+    tasks: Array.isArray(data.tasks) ? data.tasks : [],
+    plan: data.plan || null,
+    quickReply: Boolean(data.quickReply),
+    cachedReply: Boolean(data.cachedReply),
+    directAction: Boolean(data.directAction),
+    workflowCleared: Boolean(data.workflowCleared),
+    planningFailed: Boolean(data.planningFailed),
+    error: data.error,
+    details: data.details,
+  };
+};
+
 export const loadConversationHistory = async (
   sessionId = getClientIdentity().sessionId
 ): Promise<{

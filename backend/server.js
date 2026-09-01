@@ -1229,6 +1229,96 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+// Real-time streamed variant of /api/chat. Planning and tool execution must
+// still complete before an answer exists, but the final reply is streamed
+// token-by-token as it is generated instead of arriving as one block.
+app.post("/api/chat/stream", async (req, res) => {
+  const requestId = req.audit?.requestId || crypto.randomUUID();
+
+  const {
+    message = "",
+    sessionId = "default",
+    userId = null,
+    locationContext = null,
+  } = req.body || {};
+
+  const normalizedMessage = String(message).trim();
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  if (!normalizedMessage) {
+    res.write(`data: ${JSON.stringify({ error: "Missing message" })}\n\n`);
+    return res.end();
+  }
+
+  console.log("[ATHINA][/api/chat/stream] Agent request received:", {
+    requestId,
+    sessionId,
+    userId,
+    messageLength: normalizedMessage.length,
+  });
+
+  let streamedAny = false;
+  const onReplyChunk = (delta) => {
+    if (!delta) return;
+    streamedAny = true;
+    res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+  };
+
+  try {
+    const result = await orchestrate({
+      message: normalizedMessage,
+      sessionId,
+      userId,
+      mode: "text",
+      locationContext,
+      onReplyChunk,
+    });
+
+    if (!streamedAny && result.reply) {
+      res.write(`data: ${JSON.stringify({ delta: result.reply })}\n\n`);
+    }
+
+    await emitAudit({
+      requestId,
+      sessionId,
+      actorId: userId,
+      endpoint: req.originalUrl,
+      eventType: "agent.chat.result",
+      status: result.success ? "success" : "error",
+      metadata: {
+        tasksCount: Array.isArray(result.tasks) ? result.tasks.length : 0,
+        actionsCount: Array.isArray(result.actions) ? result.actions.length : 0,
+        directAction: Boolean(result.directAction),
+        quickReply: Boolean(result.quickReply),
+        cachedReply: Boolean(result.cachedReply),
+        workflowCleared: Boolean(result.workflowCleared),
+        planningFailed: Boolean(result.planningFailed),
+      },
+    });
+
+    res.write(`data: ${JSON.stringify({ done: true, ...result, requestId })}\n\n`);
+    return res.end();
+  } catch (error) {
+    console.error("[ATHINA][/api/chat/stream] Orchestrator error:", {
+      requestId,
+      message: error?.message || "Unknown error",
+    });
+
+    res.write(
+      `data: ${JSON.stringify({
+        error: error?.message || "Chat processing failed",
+        done: true,
+        requestId,
+      })}\n\n`
+    );
+    return res.end();
+  }
+});
+
 app.post("/api/voice", async (req, res) => {
   try {
     const {
