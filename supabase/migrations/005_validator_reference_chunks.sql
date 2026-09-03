@@ -56,3 +56,6 @@ AS $$
   ORDER BY reference.embedding <=> query_embedding_input::vector(1536)
   LIMIT GREATEST(match_count, 1);
 $$;
+
+-- Refresh the PostgREST schema cache so Supabase RPC calls see the function.
+NOTIFY pgrst, 'reload schema';
