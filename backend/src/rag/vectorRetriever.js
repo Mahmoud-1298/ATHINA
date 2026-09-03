@@ -23,12 +23,12 @@ export const retrieveReferenceChunks = async ({
 	if (!client) throw new Error("[RAG] Supabase is not configured.");
 
 	const rpcArgs = {
-		query_embedding_input: toVectorLiteral(embedding),
-		filter_category: category,
-		match_count: limit,
+		p_query_embedding: toVectorLiteral(embedding),
+		p_filter_category: category,
+		p_match_count: limit,
 	};
 	let { data, error } = await client.rpc(
-		"match_validator_reference_chunks",
+		"match_validator_reference_chunks_v2",
 		rpcArgs
 	);
 
@@ -44,10 +44,10 @@ export const retrieveReferenceChunks = async ({
 	}
 
 	if (!data?.length && category) {
-		const fallback = await client.rpc("match_validator_reference_chunks", {
+		const fallback = await client.rpc("match_validator_reference_chunks_v2", {
 			...rpcArgs,
-			filter_category: null,
-			match_count: Math.max(limit * 8, 64),
+			p_filter_category: null,
+			p_match_count: Math.max(limit * 8, 64),
 		});
 
 		if (fallback.error) {
