@@ -22,11 +22,15 @@ export const retrieveReferenceChunks = async ({
 	const client = getSupabaseClient();
 	if (!client) throw new Error("[RAG] Supabase is not configured.");
 
-	const { data, error } = await client.rpc("match_validator_reference_chunks", {
+	const rpcArgs = {
 		query_embedding_input: toVectorLiteral(embedding),
 		filter_category: category,
 		match_count: limit,
-	});
+	};
+	let { data, error } = await client.rpc(
+		"match_validator_reference_chunks",
+		rpcArgs
+	);
 
 	if (error) {
 		const migrationHint = /function .*match_validator_reference_chunks|schema cache/i.test(
@@ -39,7 +43,25 @@ export const retrieveReferenceChunks = async ({
 		);
 	}
 
-	return (data || [])
+	if (!data?.length && category) {
+		const fallback = await client.rpc("match_validator_reference_chunks", {
+			...rpcArgs,
+			filter_category: null,
+			match_count: Math.max(limit * 8, 64),
+		});
+
+		if (fallback.error) {
+			throw new Error(
+				`[RAG] Category retrieval returned no rows, and unfiltered retrieval failed: ${fallback.error.message}`
+			);
+		}
+
+		data = (fallback.data || []).filter(
+			(row) => String(row.category || "").toLowerCase() === String(category).toLowerCase()
+		);
+	}
+
+	const chunks = (data || [])
 		.filter((row) => Number(row.similarity || 0) >= minSimilarity)
 		.map((row) => ({
 			id: row.id,
@@ -52,6 +74,11 @@ export const retrieveReferenceChunks = async ({
 			similarity: Number(row.similarity || 0),
 			source: "vector",
 		}));
+
+	console.log(
+		`[RAG] Retrieved ${chunks.length} chunks${category ? ` for category ${category}` : ""}`
+	);
+	return chunks;
 };
 
 export { VECTOR_DIMENSIONS };
