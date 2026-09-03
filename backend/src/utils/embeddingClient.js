@@ -81,7 +81,10 @@ export const getEmbedding = async (text, modelOverride = null) => {
     return null;
   }
 
-  const model = modelOverride || provider.model;
+  const model = resolveEmbeddingModel(
+    provider.name,
+    modelOverride || provider.model
+  );
   validateModel(provider, model);
 
   console.log(

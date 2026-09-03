@@ -29,8 +29,13 @@ export const retrieveReferenceChunks = async ({
 	});
 
 	if (error) {
+		const migrationHint = /function .*match_validator_reference_chunks|schema cache/i.test(
+			error.message
+		)
+			? " Apply supabase/migrations/005_validator_reference_chunks.sql to the production project."
+			: "";
 		throw new Error(
-			`[RAG] Failed to retrieve reference chunks from ${TABLE_NAME}: ${error.message}`
+			`[RAG] Failed to retrieve reference chunks from ${TABLE_NAME}: ${error.message}${migrationHint}`
 		);
 	}
 
