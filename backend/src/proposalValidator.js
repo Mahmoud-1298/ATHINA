@@ -1,13 +1,19 @@
 import crypto from "crypto";
 import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
+import "./config/loadEnv.js";
 import { callLLM } from "./utils/llmClient.js";
 import { cleanText, safeJsonParse } from "./utils/helpers.js";
-import { getEmbedding, embeddingsEnabled } from "./utils/embeddingClient.js";
+import {
+  getEmbedding,
+  embeddingsEnabled,
+  EMBEDDING_MODEL,
+} from "./utils/embeddingClient.js";
 import {
   getSupabaseClient,
   saveValidationReport,
 } from "./memory/supabaseMemory.js";
+import { retrieveReferenceChunks, VECTOR_DIMENSIONS } from "./rag/vectorRetriever.js";
 
 const VALIDATOR_BUCKET =
   process.env.SUPABASE_VALIDATOR_BUCKET || "athina-validator";
@@ -29,7 +35,8 @@ const VALIDATOR_PRIMARY_MODEL =
 // Used only for semantic relevance matching (embeddings endpoint), not scoring.
 const VALIDATOR_EMBEDDING_MODEL =
   process.env.VALIDATOR_EMBEDDING_MODEL ||
-  "nvidia/llama-nemotron-embed-vl-1b-v2:free";
+  process.env.EMBEDDING_MODEL ||
+  EMBEDDING_MODEL;
 const VALIDATOR_SEMANTIC_RESCUE_THRESHOLD = Number(
   process.env.VALIDATOR_SEMANTIC_RESCUE_THRESHOLD || 0.62
 );
@@ -770,9 +777,20 @@ const extractCommercialChecks = (text) => {
   };
 };
 
-const buildCategoryPackets = (referenceFiles, proposalText) =>
-  CATEGORIES.map((category) => {
-    const files = referenceFiles.filter((file) => file.category === category.key);
+const buildCategoryPackets = async (referenceFiles, proposalText, proposalEmbedding) =>
+  Promise.all(CATEGORIES.map(async (category) => {
+    const uploadedFiles = referenceFiles.filter(
+      (file) => file.source === "uploaded" && file.category === category.key
+    );
+    const vectorFiles = proposalEmbedding
+      ? await retrieveReferenceChunks({
+          embedding: proposalEmbedding,
+          category: category.key,
+          limit: 8,
+          minSimilarity: 0.2,
+        })
+      : [];
+    const files = [...vectorFiles, ...uploadedFiles];
     const referenceText = files
       .map(
         (file) =>
@@ -798,7 +816,7 @@ const buildCategoryPackets = (referenceFiles, proposalText) =>
       proposalExtract:
         proposalExtract || trimForPrompt(proposalText, 6000),
     };
-  });
+  }));
 
 const buildValidatorPrompt = (packets, diagnostics) => {
   const packetText = packets
@@ -1315,6 +1333,37 @@ const getReferenceFiles = async () => {
   return referenceCache.files;
 };
 
+const normalizeReferenceMode = (value) => {
+  const mode = String(value || "database").toLowerCase();
+  return ["database", "uploaded", "both"].includes(mode) ? mode : "database";
+};
+
+const hydrateUploadedReferenceFiles = async (files) => {
+  if (!Array.isArray(files)) return [];
+
+  const hydrated = [];
+  for (const file of files.slice(0, 10)) {
+    if (!file?.fileName || !file?.contentBase64) continue;
+    const buffer = Buffer.from(String(file.contentBase64), "base64");
+    if (!buffer.length) continue;
+    const content = await extractTextFromBuffer(
+      buffer,
+      file.fileName,
+      file.mimeType || "application/octet-stream"
+    );
+    if (!content) continue;
+    hydrated.push({
+      name: file.fileName,
+      path: `uploaded/${file.fileName}`,
+      category: detectCategory(file.fileName, content),
+      content,
+      size: file.size || buffer.length,
+      source: "uploaded",
+    });
+  }
+  return hydrated;
+};
+
 const uploadProposalCopy = async ({
   buffer,
   fileName,
@@ -1432,6 +1481,8 @@ export const validateProposalUpload = async ({
   contentBase64,
   userId = null,
   sessionId = "default",
+  referenceMode = "database",
+  additionalReferenceFiles = [],
 }) => {
   if (!fileName || !contentBase64) {
     throw new Error("Missing proposal file data.");
@@ -1451,12 +1502,18 @@ export const validateProposalUpload = async ({
     );
   }
 
-  const referenceFiles = await getReferenceFiles();
+  const mode = normalizeReferenceMode(referenceMode);
+  const databaseReferenceFiles = mode === "uploaded" ? [] : await getReferenceFiles();
+  const uploadedReferenceFiles =
+    mode === "database" ? [] : await hydrateUploadedReferenceFiles(additionalReferenceFiles);
+  const referenceFiles = [...databaseReferenceFiles, ...uploadedReferenceFiles];
   if (!referenceFiles.length) {
     throw new Error(
-      `No reference files were found in Supabase bucket "${VALIDATOR_BUCKET}" under prefix "${
-        VALIDATOR_REFERENCE_PREFIX || "/"
-      }".`
+      mode === "uploaded"
+        ? "No valid uploaded reference files were provided."
+        : `No reference files were found in Supabase bucket "${VALIDATOR_BUCKET}" under prefix "${
+            VALIDATOR_REFERENCE_PREFIX || "/"
+          }".`
     );
   }
 
@@ -1577,7 +1634,33 @@ export const validateProposalUpload = async ({
     sessionId,
   });
 
-  const packets = buildCategoryPackets(referenceFiles, proposalText);
+  let proposalEmbedding = null;
+  if (databaseReferenceFiles.length > 0) {
+    proposalEmbedding = await getEmbedding(proposalText, VALIDATOR_EMBEDDING_MODEL);
+    if (!proposalEmbedding) {
+      throw new Error("[RAG] Proposal embedding was not generated; vector retrieval cannot continue.");
+    }
+    if (proposalEmbedding.length !== VECTOR_DIMENSIONS) {
+      throw new Error(
+        `[RAG] Proposal embedding dimension mismatch: received ${proposalEmbedding.length}, expected ${VECTOR_DIMENSIONS}.`
+      );
+    }
+  }
+
+  const packets = await buildCategoryPackets(
+    referenceFiles,
+    proposalText,
+    proposalEmbedding
+  );
+
+  if (
+    databaseReferenceFiles.length > 0 &&
+    !packets.some((packet) => packet.files.some((file) => file.source === "vector"))
+  ) {
+    throw new Error(
+      `[RAG] No indexed reference chunks were found for the database references. Run npm run reference:index after applying the validator reference chunks migration.`
+    );
+  }
 
   console.log("[VALIDATOR] Starting category validation", {
     proposalName: fileName,

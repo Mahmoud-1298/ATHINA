@@ -777,6 +777,8 @@ app.post("/api/functions/:functionName", async (req, res) => {
         contentBase64 = "",
         sessionId = "default",
         userId = null,
+        referenceMode = "database",
+        additionalReferenceFiles = [],
       } = req.body || {};
 
       const result = await validateProposalUpload({
@@ -785,6 +787,8 @@ app.post("/api/functions/:functionName", async (req, res) => {
         contentBase64,
         sessionId,
         userId,
+        referenceMode,
+        additionalReferenceFiles,
       });
 
       await emitAudit({
