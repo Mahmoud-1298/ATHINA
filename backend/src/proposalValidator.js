@@ -787,7 +787,7 @@ const buildCategoryPackets = async (referenceFiles, proposalText, proposalEmbedd
           embedding: proposalEmbedding,
           category: category.key,
           limit: 8,
-          minSimilarity: -1,
+          minSimilarity: 0.2
         })
       : [];
     const files = [...vectorFiles, ...uploadedFiles];
