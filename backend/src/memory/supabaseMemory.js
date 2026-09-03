@@ -1,15 +1,25 @@
 import { createClient } from "@supabase/supabase-js";
 
-// Private Supabase project (hardcoded defaults, overridable by env vars)
-const SUPABASE_URL = process.env.SUPABASE_URL || "https://mehcuixkxkbnebjezcwo.supabase.co";
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-
 let supabase = null;
 
 const getSupabase = () => {
   if (supabase) return supabase;
-  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
-  supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  const url = process.env.SUPABASE_URL || "";
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+  if (
+    !url ||
+    !key
+  ) {
+    return null;
+  }
+
+  supabase = createClient(
+    url,
+    key
+  );
+
   return supabase;
 };
 

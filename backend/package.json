@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "reference:index": "node src/rag/referenceIndexer.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
@@ -19,4 +20,6 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1"
   }
+
+
 }
