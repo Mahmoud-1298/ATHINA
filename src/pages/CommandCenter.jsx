@@ -1,22 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import {
   CalendarCheck2,
   FileCheck2,
+  LogOut,
   MapPin,
   Sparkles,
 } from 'lucide-react';
 import AthinaAvatar from '@/components/athina/AthinaAvatar';
 import AgentConsole from '@/components/athina/AgentConsole';
 import GoogleMapPopup from '@/components/athina/GoogleMapPopup';
-import { BACKEND_BASE_URL } from '@/lib/functionApi';
+import { invokeFunction } from '@/lib/functionApi';
 import { getClientIdentity } from '@/lib/clientIdentity';
+import { useAuth } from '@/lib/AuthContext';
 
 export default function CommandCenter() {
   const [clock, setClock] = useState(new Date());
   const [userName, setUserName] = useState('');
   const [mapPopup, setMapPopup] = useState(null);
   const [avatarState, setAvatarState] = useState('idle');
+  const { user, logout } = useAuth();
 
   useEffect(() => {
     const interval = setInterval(() => setClock(new Date()), 1000);
@@ -24,19 +28,9 @@ export default function CommandCenter() {
   }, []);
 
   useEffect(() => {
-    try {
-      const storedUser = localStorage.getItem('athina_user');
-      if (storedUser) {
-        const user = JSON.parse(storedUser);
-        if (user?.full_name) setUserName(user.full_name);
-        else if (user?.email) setUserName(String(user.email).split('@')[0]);
-        return;
-      }
-    } catch {
-      // Ignore local storage parsing issues and use the fallback name.
-    }
-    setUserName('Operator');
-  }, []);
+    const name = user?.user_metadata?.full_name || user?.email?.split('@')[0];
+    setUserName(name || 'Operator');
+  }, [user]);
 
   // The map only appears as a popup for navigation/traffic/location requests.
   const handleActions = (actions) => {
@@ -82,9 +76,24 @@ export default function CommandCenter() {
   });
 
   const identity = getClientIdentity();
-  const googleConnectHref = `${BACKEND_BASE_URL}/api/google/oauth?sessionId=${encodeURIComponent(
-    identity.sessionId || 'default',
-  )}${identity.userId ? `&userId=${encodeURIComponent(identity.userId)}` : ''}`;
+  const handleGoogleConnect = async () => {
+    try {
+      const { data } = await invokeFunction('googleConnectUrl', {
+        sessionId: identity.sessionId || 'default',
+      });
+      window.location.assign(data.url);
+    } catch (error) {
+      toast.error(error.message || 'Could not start Google connection.');
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch (error) {
+      toast.error(error.message || 'Could not sign out.');
+    }
+  };
 
   const firstName = userName ? String(userName).trim().split(/\s+/)[0] : 'there';
 
@@ -124,16 +133,15 @@ export default function CommandCenter() {
             <span className="hidden md:inline">Proposal Validator</span>
           </Link>
 
-          <a
-            href={googleConnectHref}
-            target="_blank"
-            rel="noreferrer"
+          <button
+            type="button"
+            onClick={handleGoogleConnect}
             className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-2.5 text-xs font-medium text-slate-200 transition hover:border-blue-400/35 hover:bg-blue-500/15 hover:text-white sm:px-3"
             title="Connect Google Calendar and Gmail"
           >
             <CalendarCheck2 className="h-4 w-4 text-blue-300" />
             <span className="hidden md:inline">Connect Google</span>
-          </a>
+          </button>
 
           <Link
             to="/map"
@@ -142,6 +150,16 @@ export default function CommandCenter() {
           >
             <MapPin className="h-4 w-4" />
           </Link>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="grid h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/[0.06] text-slate-300 transition hover:border-rose-400/35 hover:bg-rose-500/15 hover:text-rose-200"
+            title="Sign out"
+            aria-label="Sign out"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
 
           <div className="hidden h-9 items-center border-l border-white/10 pl-3 sm:flex">
             <div className="text-right">

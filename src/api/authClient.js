@@ -1,56 +1,82 @@
-import { invokeFunction } from '@/lib/functionApi';
+import { supabase } from "@/integrations/supabase/client";
+import { invokeFunction } from "@/lib/functionApi";
 
-const getLocalUser = () => {
-  const stored = localStorage.getItem('athina_user');
-  if (stored) {
-    try {
-      return JSON.parse(stored);
-    } catch {
-      // Ignore malformed storage data and fallback to a default user.
-    }
-  }
-
-  const localUser = {
-    id: localStorage.getItem('athina_session_id') || crypto.randomUUID(),
-    email: 'operator@local.athina',
-    full_name: 'Operator',
-    role: 'admin',
-  };
-  localStorage.setItem('athina_session_id', localUser.id);
-  localStorage.setItem('athina_user', JSON.stringify(localUser));
-  return localUser;
+const throwAuthError = (error) => {
+  if (error) throw error;
 };
 
 export const authClient = {
   auth: {
-    me: async () => getLocalUser(),
-    logout: (redirectTo) => {
+    me: async () => {
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      throwAuthError(sessionError);
+      if (!sessionData.session) return null;
+      const { data, error } = await supabase.auth.getUser(sessionData.session.access_token);
+      throwAuthError(error);
+      return data.user;
+    },
+    logout: async (redirectTo) => {
+      const { error } = await supabase.auth.signOut();
+      throwAuthError(error);
       if (redirectTo) window.location.href = redirectTo;
     },
     redirectToLogin: (redirectTo) => {
-      window.location.href = redirectTo || '/';
+      const next = redirectTo && new URL(redirectTo).origin === window.location.origin
+        ? new URL(redirectTo).pathname + new URL(redirectTo).search
+        : "/";
+      window.location.href = `/login?next=${encodeURIComponent(next)}`;
     },
-    loginViaEmailPassword: async () => {
-      throw new Error('Email/password auth is not configured.');
+    loginViaEmailPassword: async (email, password) => {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      throwAuthError(error);
+      if (!data.session) throw new Error("Sign-in did not create a session.");
+      return data;
     },
-    loginWithProvider: () => {
-      throw new Error('OAuth login is not configured.');
+    loginWithProvider: async (provider, redirectPath = "/") => {
+      const redirectTo = new URL(redirectPath, window.location.origin).toString();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo },
+      });
+      throwAuthError(error);
     },
-    resetPasswordRequest: async () => {
-      throw new Error('Password reset is not configured.');
+    resetPasswordRequest: async (email) => {
+      const redirectTo = new URL("/reset-password", window.location.origin).toString();
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+      throwAuthError(error);
     },
-    register: async () => {
-      throw new Error('Registration is not configured.');
+    register: async ({ email, password }) => {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: window.location.origin },
+      });
+      throwAuthError(error);
+      return data;
     },
-    verifyOtp: async () => {
-      throw new Error('OTP verification is not configured.');
+    verifyOtp: async ({ email, otpCode }) => {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email,
+        token: otpCode,
+        type: "email",
+      });
+      throwAuthError(error);
+      return data.session;
     },
-    setToken: () => {},
-    resendOtp: async () => {
-      throw new Error('OTP resend is not configured.');
+    setToken: async (accessToken, refreshToken) => {
+      const { error } = await supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+      throwAuthError(error);
     },
-    resetPassword: async () => {
-      throw new Error('Password reset is not configured.');
+    resendOtp: async (email) => {
+      const { error } = await supabase.auth.resend({ email, type: "signup" });
+      throwAuthError(error);
+    },
+    resetPassword: async (password) => {
+      const { error } = await supabase.auth.updateUser({ password });
+      throwAuthError(error);
     },
   },
   functions: {

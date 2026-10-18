@@ -1,3 +1,5 @@
+import { getAuthHeaders } from "./authHeaders";
+
 const BACKEND_ENV_URL = [
   import.meta.env.VITE_BACKEND_URL,
   import.meta.env.VITE_BACKEND_UR,
@@ -37,7 +39,7 @@ export const invokeFunction = async (functionName, payload = {}, options = {}) =
       `${BACKEND_BASE_URL}/api/functions/${encodeURIComponent(functionName)}`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(payload || {}),
       }
     );

@@ -28,7 +28,11 @@ export default function Register() {
     }
     setLoading(true);
     try {
-      await authClient.auth.register({ email, password });
+      const result = await authClient.auth.register({ email, password });
+      if (result.session) {
+        window.location.href = "/";
+        return;
+      }
       setShowOtp(true);
     } catch (err) {
       setError(err.message || "Registration failed");
@@ -42,9 +46,7 @@ export default function Register() {
     setLoading(true);
     try {
       const result = await authClient.auth.verifyOtp({ email, otpCode });
-      if (result?.access_token) {
-        authClient.auth.setToken(result.access_token);
-      }
+      if (!result?.access_token) throw new Error("Email verification did not create a session.");
       window.location.href = "/";
     } catch (err) {
       setError(err.message || "Invalid verification code");
@@ -66,8 +68,13 @@ export default function Register() {
     }
   };
 
-  const handleGoogle = () => {
-    authClient.auth.loginWithProvider("google", "/");
+  const handleGoogle = async () => {
+    setError("");
+    try {
+      await authClient.auth.loginWithProvider("google", "/");
+    } catch (err) {
+      setError(err.message || "Google sign-in failed.");
+    }
   };
 
   if (showOtp) {
@@ -76,6 +83,11 @@ export default function Register() {
         icon={Mail}
         title="Verify your email"
         subtitle={`We sent a code to ${email}`}
+        footer={
+          <Link to="/login" className="text-primary font-medium hover:underline">
+            Back to log in
+          </Link>
+        }
       >
         {error && (
           <div className="mb-4 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">

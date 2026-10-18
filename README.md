@@ -36,15 +36,20 @@ npm run dev
 
 ## Environment Variables
 
-Frontend (`.env.local`):
+Frontend (`.env.local`; public client values only):
 
 ```bash
 VITE_BACKEND_URL=http://localhost:3000
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=...
 ```
 
-Backend (`backend/.env`):
+Backend (`backend/.env`; use `backend/.env.example` as the template):
 
 ```bash
+SUPABASE_URL=...
+SUPABASE_PUBLISHABLE_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=...
 OPENROUTER_API_KEY=...
 ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=lxYfHSkYm1EzQzGhdbfc
@@ -56,7 +61,7 @@ GITHUB_OWNER=Mahmoud-1298
 GITHUB_REPO=ATHINA
 GITHUB_BRANCH=main
 
-# Optional backend CORS override
+# Backend CORS; production must use explicit HTTPS frontend origins
 FRONTEND_ORIGIN=http://localhost:5173
 ```
 
@@ -65,8 +70,18 @@ FRONTEND_ORIGIN=http://localhost:5173
 - Deploy frontend from repo root to Cloudflare Pages.
 - Deploy backend using `render.yaml` (service root is `backend/`).
 
-## Build
+## Validation
 
 ```bash
+npm test
+npm run lint
 npm run build
+cd backend && npm test
 ```
+
+## Production Checks
+
+- Keep secrets in local `.env` files; commit only `.env.example`.
+- Ensure `FRONTEND_ORIGIN` is explicitly set in production and never `*`.
+- Backend API routes require a Supabase bearer access token; the client obtains it from Supabase Auth.
+- Review [PRODUCTION_CHECKLIST.md](./PRODUCTION_CHECKLIST.md) before deploying.

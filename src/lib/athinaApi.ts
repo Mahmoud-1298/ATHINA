@@ -2,6 +2,7 @@ import {
   getClientIdentity,
   getClientUserId,
 } from "./clientIdentity";
+import { getAuthHeaders } from "./authHeaders";
 
 export interface AgentLocateAction {
   type: "locate";
@@ -187,10 +188,10 @@ export const sendAgentMessage = async (
   try {
     const response = await fetch(url, {
       method: "POST",
-      headers: {
+      headers: await getAuthHeaders({
         "Content-Type": "application/json",
         "X-Request-Id": createRequestId(),
-      },
+      }),
       body: JSON.stringify({
         message: normalizedMessage,
         sessionId,
@@ -295,10 +296,10 @@ export const streamAgentMessage = async (
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: {
+      headers: await getAuthHeaders({
         "Content-Type": "application/json",
         "X-Request-Id": createRequestId(),
-      },
+      }),
       body: JSON.stringify({
         message: normalizedMessage,
         sessionId,
@@ -410,9 +411,9 @@ export const loadConversationHistory = async (
 
   const response = await fetch(url, {
     method: "GET",
-    headers: {
+    headers: await getAuthHeaders({
       "X-Request-Id": createRequestId(),
-    },
+    }),
   });
 
   const data = await parseJsonSafe(response);
@@ -480,10 +481,10 @@ export const sendVoiceMessage = async (
 
   const response = await fetch(url, {
     method: "POST",
-    headers: {
+    headers: await getAuthHeaders({
       "Content-Type": "application/json",
       "X-Request-Id": createRequestId(),
-    },
+    }),
     body: JSON.stringify({
       audioBase64,
       sessionId,
@@ -527,10 +528,10 @@ export const speakText = async (
 
   const response = await fetch(url, {
     method: "POST",
-    headers: {
+    headers: await getAuthHeaders({
       "Content-Type": "application/json",
       "X-Request-Id": createRequestId(),
-    },
+    }),
     body: JSON.stringify({ text }),
   });
 
@@ -558,10 +559,10 @@ export const streamSpeech = async (
   const url = `${BACKEND_BASE_URL}/api/speak/stream`;
   const response = await fetch(url, {
     method: "POST",
-    headers: {
+    headers: await getAuthHeaders({
       "Content-Type": "application/json",
       "X-Request-Id": createRequestId(),
-    },
+    }),
     body: JSON.stringify({ text }),
     signal,
   });

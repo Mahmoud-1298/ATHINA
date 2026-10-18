@@ -20,6 +20,7 @@ import {
   speakText,
 } from "../lib/athinaApi.ts";
 import { getClientSessionId } from "../lib/clientIdentity";
+import { getAuthHeaders } from "../lib/authHeaders";
 
 interface Message {
   id: string;
@@ -79,6 +80,8 @@ const Index = () => {
   const [isVoiceSessionOpen, setIsVoiceSessionOpen] = useState(false);
   const [mapTarget, setMapTarget] = useState<MapTarget | null>(null);
   const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
+  const [browserPreviewHtml, setBrowserPreviewHtml] = useState("");
+  const [browserPreviewError, setBrowserPreviewError] = useState("");
   const [selectedMapLocation, setSelectedMapLocation] = useState<MapLocationContext | null>(null);
   const [showBrowserPreview, setShowBrowserPreview] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -93,6 +96,38 @@ const Index = () => {
   const isProcessingRef = useRef(false);
 
   const isActive = isVoiceSessionOpen || isRecording || isProcessing || isSpeaking;
+
+  useEffect(() => {
+    if (!browserTarget || !showBrowserPreview) {
+      setBrowserPreviewHtml("");
+      setBrowserPreviewError("");
+      return;
+    }
+
+    const controller = new AbortController();
+    const loadPreview = async () => {
+      setBrowserPreviewHtml("");
+      setBrowserPreviewError("");
+      try {
+        const url = `${BACKEND_BASE_URL}/api/preview?url=${encodeURIComponent(browserTarget.url)}`;
+        const response = await fetch(url, {
+          headers: await getAuthHeaders(),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Preview request failed (${response.status}).`);
+        }
+        setBrowserPreviewHtml(await response.text());
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setBrowserPreviewError(error.message || "Could not load the page preview.");
+        }
+      }
+    };
+
+    void loadPreview();
+    return () => controller.abort();
+  }, [browserTarget, showBrowserPreview]);
 
   useEffect(() => {
     if (!audioRef.current) {
@@ -540,11 +575,22 @@ const Index = () => {
 
             <div className="overflow-hidden rounded-3xl border border-cyan-300/10 bg-slate-900/90 shadow-inner shadow-cyan-500/5">
               {showBrowserPreview ? (
-                <iframe
-                  className="h-full w-full bg-slate-950"
-                  src={`${BACKEND_BASE_URL}/api/preview?url=${encodeURIComponent(browserTarget.url)}`}
-                  title={browserTarget.title}
-                />
+                browserPreviewError ? (
+                  <div className="flex h-full items-center justify-center p-6 text-center text-sm text-rose-200">
+                    {browserPreviewError}
+                  </div>
+                ) : browserPreviewHtml ? (
+                  <iframe
+                    className="h-full w-full bg-slate-950"
+                    srcDoc={browserPreviewHtml}
+                    sandbox="allow-scripts allow-forms"
+                    title={browserTarget.title}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                    Loading preview...
+                  </div>
+                )
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-slate-400">
                   <span className="text-sm font-semibold text-slate-100">Preview paused</span>

@@ -1,7 +1,8 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
 import { authClient } from '@/api/authClient';
+import { supabase } from '@/integrations/supabase/client';
 
-const AuthContext = createContext();
+const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -10,39 +11,54 @@ export const AuthProvider = ({ children }) => {
   const [isLoadingPublicSettings, setIsLoadingPublicSettings] = useState(true);
   const [authError, setAuthError] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [appPublicSettings, setAppPublicSettings] = useState(null); // Contains only { id, public_settings }
+  const [appPublicSettings] = useState(null);
 
   useEffect(() => {
-    checkAppState();
+    let active = true;
+    const loadUser = async () => {
+      try {
+        const currentUser = await authClient.auth.me();
+        if (!active) return;
+        setUser(currentUser || null);
+        setIsAuthenticated(Boolean(currentUser));
+        setAuthError(currentUser ? null : { type: 'auth_required', message: 'Authentication required' });
+      } catch (error) {
+        if (!active) return;
+        setUser(null);
+        setIsAuthenticated(false);
+        setAuthError({ type: 'auth_unavailable', message: error.message || 'Unable to check your session.' });
+      } finally {
+        if (active) {
+          setIsLoadingAuth(false);
+          setIsLoadingPublicSettings(false);
+          setAuthChecked(true);
+        }
+      }
+    };
+
+    void loadUser();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+      setIsAuthenticated(Boolean(session?.user));
+      setAuthError(session?.user ? null : { type: 'auth_required', message: 'Authentication required' });
+      setIsLoadingAuth(false);
+      setIsLoadingPublicSettings(false);
+      setAuthChecked(true);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
-  const checkAppState = async () => {
-    try {
-      setIsLoadingPublicSettings(true);
-      setAuthError(null);
-
-      // App-level public settings are not fetched in local auth bootstrap mode.
-      // Keep the same provider shape and treat app state as ready.
-      setAppPublicSettings({ source: 'local-auth-bootstrap' });
-      await checkUserAuth();
-      setIsLoadingPublicSettings(false);
-    } catch (error) {
-      console.error('Unexpected error:', error);
-      setAuthError({
-        type: 'unknown',
-        message: error.message || 'An unexpected error occurred'
-      });
-      setIsLoadingPublicSettings(false);
-      setIsLoadingAuth(false);
-    }
-  };
-
-  const checkUserAuth = async () => {
+  const checkUserAuth = useCallback(async () => {
     try {
       setIsLoadingAuth(true);
       const currentUser = await authClient.auth.me();
-      setUser(currentUser);
-      setIsAuthenticated(true);
+      setUser(currentUser || null);
+      setIsAuthenticated(Boolean(currentUser));
+      setAuthError(currentUser ? null : { type: 'auth_required', message: 'Authentication required' });
       setIsLoadingAuth(false);
       setAuthChecked(true);
     } catch (error) {
@@ -51,26 +67,24 @@ export const AuthProvider = ({ children }) => {
       setIsAuthenticated(false);
       setAuthChecked(true);
       setAuthError({
-        type: 'auth_required',
-        message: 'Authentication required'
+        type: 'auth_unavailable',
+        message: error.message || 'Unable to check your session.'
       });
     }
-  };
+  }, []);
 
-  const logout = (shouldRedirect = true) => {
+  const logout = async (shouldRedirect = true) => {
     setUser(null);
     setIsAuthenticated(false);
-    
-    if (shouldRedirect) {
-      authClient.auth.logout(window.location.href);
-    } else {
-      authClient.auth.logout();
-    }
+    setAuthError({ type: 'auth_required', message: 'Authentication required' });
+    await authClient.auth.logout(shouldRedirect ? `${window.location.origin}/login` : undefined);
   };
 
   const navigateToLogin = () => {
     authClient.auth.redirectToLogin(window.location.href);
   };
+
+  const checkAppState = checkUserAuth;
 
   return (
     <AuthContext.Provider value={{ 

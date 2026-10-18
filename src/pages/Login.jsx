@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { authClient } from "@/api/authClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,10 +9,18 @@ import AuthLayout from "@/components/AuthLayout";
 import GoogleIcon from "@/components/GoogleIcon";
 
 export default function Login() {
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const getRedirectPath = () => {
+    const candidate = searchParams.get("next") || "/";
+    const destination = new URL(candidate, window.location.origin);
+    return destination.origin === window.location.origin
+      ? `${destination.pathname}${destination.search}${destination.hash}`
+      : "/";
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -20,7 +28,7 @@ export default function Login() {
     setLoading(true);
     try {
       await authClient.auth.loginViaEmailPassword(email, password);
-      window.location.href = "/";
+      window.location.href = getRedirectPath();
     } catch (err) {
       setError(err.message || "Invalid email or password");
     } finally {
@@ -28,8 +36,13 @@ export default function Login() {
     }
   };
 
-  const handleGoogle = () => {
-    authClient.auth.loginWithProvider("google", "/");
+  const handleGoogle = async () => {
+    setError("");
+    try {
+      await authClient.auth.loginWithProvider("google", getRedirectPath());
+    } catch (err) {
+      setError(err.message || "Google sign-in failed.");
+    }
   };
 
   return (

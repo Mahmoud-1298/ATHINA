@@ -11,17 +11,19 @@ export default function ForgotPassword() {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
+  const [error, setError] = useState("");
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError("");
     setLoading(true);
     try {
       await authClient.auth.resetPasswordRequest(email);
-    } catch {
-      // Always show success regardless
+      setSent(true);
+    } catch (requestError) {
+      setError(requestError.message || "Unable to send the password reset email.");
     } finally {
       setLoading(false);
-      setSent(true);
     }
   };
 
@@ -42,6 +44,11 @@ export default function ForgotPassword() {
         </p>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
+          {error && (
+            <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+              {error}
+            </div>
+          )}
           <div className="space-y-2">
             <Label htmlFor="email">Email address</Label>
             <div className="relative">

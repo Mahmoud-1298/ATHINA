@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { google } from "googleapis";
 import { getContext, saveContext } from "../memory/supabaseMemory.js";
 
@@ -30,6 +31,57 @@ const createOAuthClient = () => {
 
 const authContextKey = "google_oauth";
 
+const signOAuthState = (payload, clientSecret) => {
+  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = crypto
+    .createHmac("sha256", clientSecret)
+    .update(encodedPayload)
+    .digest("base64url");
+  return `${encodedPayload}.${signature}`;
+};
+
+const verifyOAuthState = (state, clientSecret) => {
+  const [encodedPayload, providedSignature, ...extraParts] = String(state || "").split(".");
+  if (!encodedPayload || !providedSignature || extraParts.length) {
+    throw new Error("Invalid Google OAuth state.");
+  }
+
+  const expectedSignature = crypto
+    .createHmac("sha256", clientSecret)
+    .update(encodedPayload)
+    .digest();
+  let actualSignature;
+  try {
+    actualSignature = Buffer.from(providedSignature, "base64url");
+  } catch {
+    throw new Error("Invalid Google OAuth state.");
+  }
+  if (
+    actualSignature.length !== expectedSignature.length ||
+    !crypto.timingSafeEqual(actualSignature, expectedSignature)
+  ) {
+    throw new Error("Invalid Google OAuth state.");
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Invalid Google OAuth state.");
+  }
+  const now = Date.now();
+  if (
+    !payload.userId ||
+    !payload.sessionId ||
+    !Number.isFinite(payload.issuedAt) ||
+    payload.issuedAt > now + 30_000 ||
+    now - payload.issuedAt > 10 * 60 * 1000
+  ) {
+    throw new Error("Google OAuth state has expired or is invalid.");
+  }
+  return payload;
+};
+
 const readStoredTokens = async ({ sessionId = "default", userId = null }) => {
   const sessionCandidates = Array.from(new Set([
     sessionId || "default",
@@ -45,6 +97,7 @@ const readStoredTokens = async ({ sessionId = "default", userId = null }) => {
         return { ...userScoped, _source: { sessionId: candidate, userId } };
       }
     }
+    return null;
   }
 
   // Fall back to legacy session-only tokens (userId null).
@@ -60,7 +113,9 @@ const readStoredTokens = async ({ sessionId = "default", userId = null }) => {
 
 export const getGoogleAuthStatus = async ({ sessionId = "default", userId = null } = {}) => {
   const stored = await readStoredTokens({ sessionId, userId });
-  const hasRefreshToken = Boolean(stored?.refresh_token || process.env.GOOGLE_REFRESH_TOKEN);
+  const hasRefreshToken = Boolean(
+    stored?.refresh_token || (!userId && process.env.GOOGLE_REFRESH_TOKEN)
+  );
   return {
     connected: hasRefreshToken,
     sessionId,
@@ -73,7 +128,12 @@ export const getGoogleAuthStatus = async ({ sessionId = "default", userId = null
 
 export const buildGoogleConnectUrl = async ({ sessionId = "default", userId = null } = {}) => {
   const oauth2Client = createOAuthClient();
-  const state = Buffer.from(JSON.stringify({ sessionId, userId }), "utf8").toString("base64url");
+  const { clientSecret } = requireClientConfig();
+  const state = signOAuthState({
+    sessionId,
+    userId,
+    issuedAt: Date.now(),
+  }, clientSecret);
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
@@ -85,25 +145,16 @@ export const buildGoogleConnectUrl = async ({ sessionId = "default", userId = nu
 
 export const exchangeGoogleCode = async ({ code, state } = {}) => {
   if (!code) throw new Error("Missing OAuth code.");
+  if (!state) throw new Error("Missing Google OAuth state.");
+  const { clientSecret } = requireClientConfig();
+  const { sessionId, userId } = verifyOAuthState(state, clientSecret);
   const oauth2Client = createOAuthClient();
 
   const { tokens } = await oauth2Client.getToken(code);
   if (!tokens) throw new Error("Google OAuth token exchange failed.");
 
-  let sessionId = "default";
-  let userId = null;
-
-  if (state) {
-    try {
-      const parsed = JSON.parse(Buffer.from(String(state), "base64url").toString("utf8"));
-      sessionId = parsed.sessionId || sessionId;
-      userId = parsed.userId || null;
-    } catch {
-      // Ignore malformed state and keep defaults.
-    }
-  }
-
-  const refreshToken = tokens.refresh_token || process.env.GOOGLE_REFRESH_TOKEN || null;
+  const previousTokens = await readStoredTokens({ sessionId, userId });
+  const refreshToken = tokens.refresh_token || previousTokens?.refresh_token || null;
   if (!refreshToken) {
     throw new Error("Google OAuth did not return a refresh token. Reconnect with prompt=consent and access_type=offline.");
   }
@@ -143,7 +194,7 @@ export const exchangeGoogleCode = async ({ code, state } = {}) => {
 export const getGoogleClients = async ({ sessionId = "default", userId = null } = {}) => {
   const oauth2Client = createOAuthClient();
   const stored = await readStoredTokens({ sessionId, userId });
-  const refreshToken = stored?.refresh_token || process.env.GOOGLE_REFRESH_TOKEN;
+  const refreshToken = stored?.refresh_token || (!userId && process.env.GOOGLE_REFRESH_TOKEN);
 
   if (!refreshToken) {
     throw new Error("Google account is not connected. Open /api/google/connect-url (or call function googleConnectUrl) and authorize first.");

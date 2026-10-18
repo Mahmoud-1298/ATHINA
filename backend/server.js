@@ -1,8 +1,11 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import crypto from "crypto";
 import { orchestrate } from "./src/orchestrator.js";
+import { requireAuth } from "./src/auth/requireAuth.js";
 import {
   getProposalValidatorContext,
   getProposalValidatorDebug,
@@ -31,6 +34,34 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "*";
 
+if (process.env.NODE_ENV === "production") {
+  const missing = [
+    ["SUPABASE_URL", process.env.SUPABASE_URL],
+    ["SUPABASE_SERVICE_ROLE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY],
+    ["SUPABASE_PUBLISHABLE_KEY or SUPABASE_ANON_KEY", process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY],
+    ["OPENROUTER_API_KEY", process.env.OPENROUTER_API_KEY],
+  ].filter(([, value]) => !String(value || "").trim()).map(([name]) => name);
+  if (/^sb_(publishable|anon)_/i.test(String(process.env.SUPABASE_SERVICE_ROLE_KEY || ""))) {
+    missing.push("SUPABASE_SERVICE_ROLE_KEY (must be a secret/service-role key, not a publishable key)");
+  }
+  const productionOrigins = FRONTEND_ORIGIN.split(",").map((origin) => origin.trim());
+  if (FRONTEND_ORIGIN === "*" || productionOrigins.some((origin) => !/^https:\/\/[^/]+$/i.test(origin))) {
+    missing.push("FRONTEND_ORIGIN (comma-separated HTTPS origins; wildcard is not allowed)");
+  }
+  if (missing.length) {
+    throw new Error(`Missing or invalid production configuration: ${missing.join(", ")}`);
+  }
+  app.set("trust proxy", 1);
+}
+
+app.disable("x-powered-by");
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
 const allowedOrigins =
   FRONTEND_ORIGIN === "*"
     ? []
@@ -55,6 +86,17 @@ app.use(
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
+  })
+);
+
+app.use(
+  ["/api", "/v1/chat/completions", "/chat/completions"],
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: "Too many requests, please try again later." },
   })
 );
 
@@ -632,10 +674,17 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
 });
 
+app.use("/api", (req, res, next) => {
+  if (req.path === "/google/oauth/callback") return next();
+  return requireAuth(req, res, next);
+});
+
+app.use(["/v1/chat/completions", "/chat/completions"], requireAuth);
+
 app.get("/api/history/:sessionId", async (req, res) => {
   try {
     const sessionId = String(req.params.sessionId || "default");
-    const userId = req.query.userId ? String(req.query.userId) : null;
+    const userId = req.auth.user.id;
     const history = await getHistory(sessionId, 20, userId);
     return res.json({ success: true, sessionId, messages: history });
   } catch (error) {
@@ -650,7 +699,7 @@ app.get("/api/history/:sessionId", async (req, res) => {
 app.get("/api/google/connect-url", async (req, res) => {
   try {
     const sessionId = String(req.query.sessionId || "default");
-    const userId = req.query.userId ? String(req.query.userId) : null;
+    const userId = req.auth.user.id;
     const result = await buildGoogleConnectUrl({ sessionId, userId });
     return res.json({ success: true, ...result });
   } catch (error) {
@@ -664,7 +713,7 @@ app.get("/api/google/connect-url", async (req, res) => {
 app.get("/api/google/oauth", async (req, res) => {
   try {
     const sessionId = String(req.query.sessionId || "default");
-    const userId = req.query.userId ? String(req.query.userId) : null;
+    const userId = req.auth.user.id;
     const result = await buildGoogleConnectUrl({ sessionId, userId });
     return res.redirect(result.url);
   } catch (error) {
@@ -677,7 +726,7 @@ app.get("/api/google/oauth", async (req, res) => {
 app.get("/api/google/status", async (req, res) => {
   try {
     const sessionId = String(req.query.sessionId || "default");
-    const userId = req.query.userId ? String(req.query.userId) : null;
+    const userId = req.auth.user.id;
     const status = await getGoogleAuthStatus({ sessionId, userId });
     return res.json({ success: true, ...status });
   } catch (error) {
@@ -1065,7 +1114,8 @@ const chatCompletionsHandler = async (req, res) => {
       mode = "athina";
       sessionId = body.sessionId || "default";
       userMessage = body.message || "";
-      const history = await getHistory(sessionId, 6);
+      const userId = req.auth.user.id;
+      const history = await getHistory(sessionId, 6, userId);
       messages = [
         {
           role: "system",
@@ -1109,12 +1159,13 @@ const chatCompletionsHandler = async (req, res) => {
       });
 
       if (mode === "athina" && userMessage) {
-        void saveTurn(sessionId, userMessage, fullText).catch(console.error);
+        void saveTurn(sessionId, userMessage, fullText, req.auth.user.id).catch(console.error);
       }
 
       await emitAudit({
         requestId,
         sessionId: mode === "athina" ? sessionId : null,
+        actorId: mode === "athina" ? req.auth.user.id : null,
         endpoint: req.originalUrl,
         eventType: "chat.stream.complete",
         status: "success",
@@ -1128,12 +1179,13 @@ const chatCompletionsHandler = async (req, res) => {
     const data = await response.json();
     if (mode === "athina" && userMessage) {
       const content = data?.choices?.[0]?.message?.content || "";
-      await saveTurn(sessionId, userMessage, content);
+      await saveTurn(sessionId, userMessage, content, req.auth.user.id);
     }
 
     await emitAudit({
       requestId,
       sessionId: mode === "athina" ? sessionId : null,
+      actorId: mode === "athina" ? req.auth.user.id : null,
       endpoint: req.originalUrl,
       eventType: "chat.complete",
       status: "success",
